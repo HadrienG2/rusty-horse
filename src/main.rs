@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use crate::progress::ProgressReport;
 use anyhow::Context;
+use reqwest::Response;
 use tokio::task::JoinSet;
 use futures::StreamExt;
 
@@ -52,7 +53,11 @@ async fn download_and_process(
 ) -> Result<()> {
     // Start the download
     let context = || format!("Initiating download of data file {url}");
-    let response = client.get(&*url).send().await.with_context(context)?;
+    let response = client.get(&*url)
+        .send()
+        .await
+        .and_then(Response::error_for_status)
+        .with_context(context)?;
     report.start_download(response.content_length().with_context(context)?);
 
     // Process the byte stream
