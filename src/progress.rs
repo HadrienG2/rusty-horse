@@ -13,6 +13,9 @@ pub struct ProgressReport {
 
     /// Progress bar indicating the status of running downloads
     bytes: ProgressBar,
+
+    /// Progress bar indicating the status of sorting n-grams
+    sort: ProgressBar,
 }
 //
 impl ProgressReport {
@@ -27,16 +30,22 @@ impl ProgressReport {
             .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         multi.add(start.clone());
 
-        // Prepare to set up ongoing download tracking
+        // Prepare to track ongoing downloads
         let bytes = ProgressBar::new(0)
             .with_prefix("Downloading and processing data")
             .with_style(
                 ProgressStyle::with_template("{prefix} {wide_bar} {bytes}/{total_bytes}").unwrap(),
             );
+
+        // Prepare to track n-gram sorting
+        let sort = ProgressBar::new(0)
+            .with_prefix("Sorting n-grams")
+            .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         Arc::new(Self {
             multi,
             start,
             bytes,
+            sort,
         })
     }
 
@@ -59,7 +68,7 @@ impl ProgressReport {
 
         // If all expected downloads have started, hide progress bar
         if started_files == num_files {
-            self.start.finish();
+            self.start.finish_and_clear();
             self.multi.remove(&self.start);
         }
     }
@@ -84,8 +93,51 @@ impl ProgressReport {
 
         // Track overall end of downloads
         if self.bytes.position() == curr_len && self.start.is_finished() {
-            self.bytes.finish();
+            self.bytes.finish_and_clear();
             self.multi.remove(&self.bytes);
+        }
+    }
+
+    /// Start tracking the final n-grams sort
+    pub fn start_sort(&self, num_ngrams: usize) {
+        // Make sure that we are ready to sort
+        assert!(
+            self.start.is_finished() && self.bytes.is_finished(),
+            "Should not start sorting n-grams before they have all been collected"
+        );
+
+        // Make sure that we have not sorted already
+        assert_eq!(
+            self.sort.length(),
+            Some(0),
+            "Should only start sorting once"
+        );
+
+        // Prepare to track the sort
+        self.sort.inc_length(num_ngrams as _);
+        self.multi.add(self.sort.clone());
+    }
+
+    /// Track that some n-grams have been sorted
+    pub fn inc_sorted(&self, num_ngrams: usize) {
+        // Make sure we don't overflow the sorting counter
+        let curr_len = self.sort.length().unwrap_or(0);
+        assert!(
+            (curr_len - self.sort.position())
+                .checked_sub(num_ngrams as _)
+                .is_some(),
+            "attempted to sort more than expected"
+        );
+        assert!(
+            !self.sort.is_finished(),
+            "Should not keep sorting after declaring sorting finished"
+        );
+
+        // Track the ongoing sort
+        self.sort.inc(num_ngrams as _);
+        if self.sort.position() == curr_len {
+            self.sort.finish_and_clear();
+            self.multi.remove(&self.sort);
         }
     }
 }

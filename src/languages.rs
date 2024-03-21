@@ -1,10 +1,21 @@
 //! Supported Google Books Ngrams languages
 
+use crate::Result;
+use anyhow::Context;
 use dialoguer::FuzzySelect;
 use std::sync::OnceLock;
 
+/// Get information about a language dictionary
+pub fn get(short_name: &str) -> Result<LanguageInfo> {
+    supported_languages()
+        .iter()
+        .find(|(_long_name, lang)| lang.short_name == short_name)
+        .map(|(_long, lang)| *lang)
+        .with_context(|| format!("Failed to find user-requested language {short_name}"))
+}
+
 /// Ask the user to select a language dictionary
-pub fn ask_language() -> dialoguer::Result<LanguageInfo> {
+pub fn prompt() -> dialoguer::Result<LanguageInfo> {
     let languages = supported_languages();
     let language_names = languages
         .iter()
