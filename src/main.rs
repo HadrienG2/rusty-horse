@@ -250,6 +250,8 @@ pub struct Entry {
     pub volume_count: NonZeroUsize,
 }
 
+// TODO: Extract stats to their own module
+
 /// Cumulative knowledge from a data file
 #[derive(Debug)]
 pub struct FileStatsBuilder {
