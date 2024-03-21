@@ -55,7 +55,8 @@ pub struct Args {
     /// characters. Therefore we ignore words which occur extremely rarely in
     /// the selected dataset section.
     //
-    // TODO: Fine-tune based on empirically observed irrelevance threshold
+    // TODO: Fine-tune default based on empirically observed irrelevance
+    //       threshold
     #[arg(short = 'm', long, default_value_t = 100)]
     min_matches: usize,
 
@@ -66,7 +67,8 @@ pub struct Args {
     /// process. Therefore, we only consider words which appear across a
     /// sufficiently large number of books.
     //
-    // TODO: Fine-tune based on empirically observed irrelevance threshold
+    // TODO: Fine-tune default based on empirically observed irrelevance
+    //       threshold
     #[arg(short = 'b', long, default_value_t = 10)]
     min_books: usize,
 
@@ -260,6 +262,7 @@ impl FileStatsBuilder {
     /// Merge information from a data file entry
     pub fn add(&mut self, entry: Entry) {
         // Ignore entries that would never be valid
+        // NOTE: We only care about words because words are most memorable
         let too_old = entry.year < self.config.min_year();
         let not_a_word = entry.ngram.contains('_');
         if too_old || not_a_word {
@@ -322,6 +325,7 @@ pub type FileStats = Box<[NgramStats]>;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NgramStats {
     /// Text of the n-gram
+    // FIXME: Use unicase strategically to achieve case-insensitivity
     pub ngram: Box<str>,
 
     /// Year of first occurence
@@ -343,6 +347,10 @@ impl NgramStats {
         assert_eq!(
             *self.ngram, entry.ngram,
             "Attempted to integrate an incompatible entry"
+        );
+        debug_assert!(
+            self.first_year <= self.last_year,
+            "Violated first < last year type invariant"
         );
         assert!(
             entry.year > self.first_year.max(self.last_year),

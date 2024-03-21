@@ -37,6 +37,7 @@ pub struct LanguageInfo {
     pub short_name: &'static str,
 
     /// Valid word prefixes
+    // NOTE: We only care about words because words are most memorable
     pub word_prefixes: &'static [Box<str>],
 }
 //
@@ -45,6 +46,8 @@ impl LanguageInfo {
     pub fn dataset_urls(&self) -> impl Iterator<Item = Box<str>> + '_ {
         self.word_prefixes.iter().map(move |word_prefix| {
             format!(
+                // NOTE: For now, we only use 1-grams to keep the dataset small
+                //       and avoid the extra complexity that comes with n-grams
                 "http://storage.googleapis.com/books/ngrams/books/googlebooks-{}-all-1gram-20120701-{word_prefix}.gz",
                 self.short_name,
             ).into()
