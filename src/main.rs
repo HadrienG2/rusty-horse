@@ -70,15 +70,15 @@ pub struct Args {
     #[arg(short = 'b', long, default_value_t = 10)]
     min_books: usize,
 
-    /// Desired number of output n-grams
+    /// Max number of output n-grams
     ///
     /// While it is possible to compute the full list of valid n-grams and trim
-    /// it after the fact, knowing the desired number of matches right from the
-    /// start allows this program to discard less frequent n-grams before the
-    /// full list of n-grams is available. As a result, the data processing
-    /// pipeline will conusme less memory and run faster.
+    /// it to the desired length later on, knowing the desired number of matches
+    /// right from the start allows this program to discard less frequent
+    /// n-grams before the full list of n-grams is available. As a result, the
+    /// processing will consume less memory and run a little faster.
     #[arg(short, long, default_value = None)]
-    num_outputs: Option<usize>,
+    max_outputs: Option<usize>,
 }
 //
 impl Args {
@@ -126,7 +126,8 @@ async fn main() -> Result<()> {
     };
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
 
-    // TODO: Implement caching so we don't re-download everything every time
+    // TODO: Consider adding some caching so that we don't have to re-download
+    //       everything every time
 
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
@@ -201,7 +202,7 @@ async fn download_and_process(
         .has_headers(false)
         .create_deserializer(tsv_bytes)
         .into_deserialize::<Entry>();
-    let mut stats = FileStatsBuilder::new(&args);
+    let mut stats = FileStatsBuilder::new(args);
     while let Some(entry) = entries.next().await {
         stats.add(entry.with_context(context)?);
     }
@@ -229,11 +230,15 @@ pub struct Entry {
 
 /// Cumulative knowledge from a data file
 #[derive(Clone, Debug)]
-pub struct FileStatsBuilder<'args> {
+pub struct FileStatsBuilder {
     /// Data collection configuration
-    config: &'args Args,
+    config: Arc<Args>,
 
     /// Accumulated data
+    // TODO: Introduce a case-insensitive case-preserving accumulation mechanism
+    //       which tracks aggregated occurences across all case variants for
+    //       popularity tracking purposes, but keeps the most frequent case
+    //       variant at the end.
     ngrams: Vec<NgramStats>,
 
     /// Last n-gram that was ignored without being merged in stats
@@ -241,9 +246,9 @@ pub struct FileStatsBuilder<'args> {
     last_ignored: String,
 }
 //
-impl<'args> FileStatsBuilder<'args> {
+impl FileStatsBuilder {
     /// Set up the accumulator
-    pub fn new(config: &'args Args) -> Self {
+    pub fn new(config: Arc<Args>) -> Self {
         Self {
             config,
             ngrams: Vec::new(),
@@ -275,18 +280,16 @@ impl<'args> FileStatsBuilder<'args> {
             debug_assert!(stats.first_year <= stats.last_year);
             // If this is the same ngram, merge into its existing stats
             if *stats.ngram == entry.ngram {
-                assert!(
-                    entry.year > stats.first_year.max(stats.last_year),
-                    "Dataset entries should be sorted by year"
-                );
-                stats.last_year = entry.year;
-                stats.match_count += entry.match_count;
-                stats.volume_count += entry.volume_count;
+                stats.add(entry);
                 return;
             }
 
             // Once we move to the next n-gram, apply the notoriety cutoff to
             // the previous n-gram as its stats are now complete
+            // TODO: Use a BTreeMap as a kind of bounded ring buffer to keep a
+            //       rolling accumulator of the max_outputs most popular entries
+            //       at any time. Do a debug log entries which pass the
+            //       max_outputs cutoff for now.
             if stats.match_count < self.config.min_matches
                 || stats.volume_count < self.config.min_books
             {
@@ -298,17 +301,16 @@ impl<'args> FileStatsBuilder<'args> {
         }
 
         // Add new stats for this ngram
-        self.ngrams.push(NgramStats {
-            ngram: entry.ngram.into(),
-            first_year: entry.year,
-            last_year: entry.year,
-            match_count: entry.match_count,
-            volume_count: entry.volume_count,
-        });
+        self.ngrams.push(NgramStats::from(entry));
     }
 
+    // TODO: Add accumulator merging that checks the config is the same and
+    //       keeps the top N entries at the end.
+
     /// Export statistics once done processing the file
-    fn finish(self) -> FileStats {
+    //
+    // TODO: Ultimately, we only want to do this once done processing all files
+    pub fn finish(self) -> FileStats {
         self.ngrams.into()
     }
 }
@@ -333,6 +335,35 @@ pub struct NgramStats {
 
     /// Total number of books with matches over period of interest
     pub volume_count: usize,
+}
+//
+impl NgramStats {
+    /// Merge the data from one dataset entry
+    pub fn add(&mut self, entry: Entry) {
+        assert_eq!(
+            *self.ngram, entry.ngram,
+            "Attempted to integrate an incompatible entry"
+        );
+        assert!(
+            entry.year > self.first_year.max(self.last_year),
+            "Dataset entries should be sorted by year"
+        );
+        self.last_year = entry.year;
+        self.match_count += entry.match_count;
+        self.volume_count += entry.volume_count;
+    }
+}
+//
+impl From<Entry> for NgramStats {
+    fn from(entry: Entry) -> Self {
+        Self {
+            ngram: entry.ngram.into(),
+            first_year: entry.year,
+            last_year: entry.year,
+            match_count: entry.match_count,
+            volume_count: entry.volume_count,
+        }
+    }
 }
 
 /// Year of Gregorian Calendar
