@@ -39,7 +39,7 @@ impl ProgressReport {
 
         // Prepare to track n-gram sorting
         let sort = ProgressBar::new(0)
-            .with_prefix("Sorting n-grams")
+            .with_prefix("Ordering n-grams by frequency")
             .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         Arc::new(Self {
             multi,
@@ -103,14 +103,14 @@ impl ProgressReport {
         // Make sure that we are ready to sort
         assert!(
             self.start.is_finished() && self.bytes.is_finished(),
-            "Should not start sorting n-grams before they have all been collected"
+            "should not start sorting n-grams before they have all been collected"
         );
 
         // Make sure that we have not sorted already
         assert_eq!(
             self.sort.length(),
             Some(0),
-            "Should only start sorting once"
+            "should only start sorting once"
         );
 
         // Prepare to track the sort
@@ -130,7 +130,7 @@ impl ProgressReport {
         );
         assert!(
             !self.sort.is_finished(),
-            "Should not keep sorting after declaring sorting finished"
+            "should not keep sorting after declaring sorting finished"
         );
 
         // Track the ongoing sort

@@ -11,7 +11,7 @@ pub fn get(short_name: &str) -> Result<LanguageInfo> {
         .iter()
         .find(|(_long_name, lang)| lang.short_name == short_name)
         .map(|(_long, lang)| *lang)
-        .with_context(|| format!("Failed to find user-requested language {short_name}"))
+        .with_context(|| format!("failed to find user-requested language {short_name}"))
 }
 
 /// Ask the user to select a language dictionary
