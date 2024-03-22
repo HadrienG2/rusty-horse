@@ -6,7 +6,10 @@ mod languages;
 mod progress;
 mod stats;
 
-use crate::{progress::ProgressReport, stats::{FileStatsBuilder, CaseStats, FileStats}};
+use crate::{
+    progress::ProgressReport,
+    stats::{FileStats, FileStatsBuilder},
+};
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
@@ -17,16 +20,13 @@ use reqwest::Response;
 use serde::Deserialize;
 use std::{
     cmp::Reverse,
-    collections::{hash_map, BinaryHeap, HashMap, VecDeque},
+    collections::{hash_map, BinaryHeap, VecDeque},
     io::{self, ErrorKind},
     num::NonZeroUsize,
     sync::Arc,
 };
 use tokio::task::JoinSet;
 use tokio_util::io::StreamReader;
-
-/// Year where the dataset that we use was published
-const DATASET_PUBLICATION_YEAR: Year = 2012;
 
 /// TODO: User-visible program description
 ///
@@ -88,41 +88,34 @@ pub struct Args {
 }
 //
 impl Args {
+    /// Decode and validate CLI arguments
+    pub fn parse_and_check() -> Result<Arc<Self>> {
+        // Decode CLI arguments
+        let args = Arc::new(Args::parse());
+
+        // Check CLI arguments for basic sanity
+        if let Some(min_year) = args.min_year {
+            anyhow::ensure!(
+                min_year <= DATASET_PUBLICATION_YEAR,
+                "requested minimum publication year excludes all books from the dataset"
+            );
+        }
+        Ok(args)
+    }
+
     /// Minimal book publication year cutoff
     pub fn min_year(&self) -> Year {
         self.min_year.unwrap_or(DATASET_PUBLICATION_YEAR - 50)
     }
 }
-
-/// Use anyhow for Result type erasure
-pub use anyhow::Result;
-
+//
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set up logging
-    syslog::init(
-        syslog::Facility::LOG_USER,
-        if cfg!(feature = "log-trace") {
-            LevelFilter::Trace
-        } else if cfg!(debug_assertions) {
-            LevelFilter::Debug
-        } else {
-            LevelFilter::Info
-        },
-        None,
-    )
-    .map_err(|e| anyhow::format_err!("{e}"))?;
+    setup_logging().map_err(|e| anyhow::format_err!("{e}"))?;
 
     // Decode CLI arguments
-    let args = Arc::new(Args::parse());
-
-    // Check CLI arguments for basic sanity
-    if let Some(min_year) = args.min_year {
-        anyhow::ensure!(
-            min_year <= DATASET_PUBLICATION_YEAR,
-            "requested minimum publication year excludes all books from the dataset"
-        );
-    }
+    let args = Args::parse_and_check()?;
 
     // Let the user pick a language
     let language = if let Some(language) = &args.language {
@@ -131,9 +124,6 @@ async fn main() -> Result<()> {
         languages::prompt()?
     };
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
-
-    // TODO: Consider adding some caching so that we don't have to re-download
-    //       everything every time
 
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
@@ -151,24 +141,26 @@ async fn main() -> Result<()> {
     }
 
     // Collect and merge statistics from data files as downloads finish
-    let mut full_stats = HashMap::<_, CaseStats>::new();
-    while let Some(join_result) = data_files.join_next().await {
-        for (name, stats) in join_result?? {
-            match full_stats.entry(name) {
+    let mut dataset_stats = FileStats::new();
+    while let Some(file_stats) = data_files.join_next().await {
+        for (name, stats) in file_stats?? {
+            match dataset_stats.entry(name) {
                 hash_map::Entry::Occupied(o) => o.into_mut().merge(stats),
-                hash_map::Entry::Vacant(v) => { v.insert(stats); }
+                hash_map::Entry::Vacant(v) => {
+                    v.insert(stats);
+                }
             }
         }
     }
 
     // Sort n-grams by frequency and pick the most frequent ones if requested
-    report.start_sort(full_stats.len());
+    report.start_sort(dataset_stats.len());
     let mut top_entries = if let Some(max_outputs) = args.max_outputs {
         BinaryHeap::with_capacity(max_outputs.get())
     } else {
-        BinaryHeap::with_capacity(full_stats.len())
+        BinaryHeap::with_capacity(dataset_stats.len())
     };
-    for (_, case_stats) in full_stats.drain() {
+    for (_, case_stats) in dataset_stats.drain() {
         top_entries.push((Reverse(case_stats.total_stats), case_stats.top_ngram));
         if let Some(max_outputs) = args.max_outputs {
             if top_entries.len() > max_outputs.get() {
@@ -190,6 +182,57 @@ async fn main() -> Result<()> {
     println!("{ngrams_by_decreasing_stats:#?}");
 
     Ok(())
+}
+
+/// Year where the dataset that we use was published
+pub const DATASET_PUBLICATION_YEAR: Year = 2012;
+
+/// Entry from the dataset
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct Entry {
+    /// (Case-sensitive) n-gram whose frequency is being studied
+    //
+    // TODO: If string allocation/deallocation becomes a bottleneck, study
+    //       in-place deserialization like rkyv.
+    pub ngram: Ngram,
+
+    /// Year in which this frequency was recorded
+    pub year: Year,
+
+    /// Number of matches
+    pub match_count: NonZeroUsize,
+
+    /// Number of books in which matches were found
+    pub volume_count: NonZeroUsize,
+}
+
+/// Case-sensitive n-gram
+pub type Ngram = Box<str>;
+
+/// Use anyhow for Result type erasure
+pub use anyhow::Result;
+
+/// Year of Gregorian Calendar
+pub type Year = isize;
+
+/// Addition operator for NonZeroUsize
+pub fn add_nonzero_usize(x: NonZeroUsize, y: NonZeroUsize) -> NonZeroUsize {
+    NonZeroUsize::new(x.get() + y.get()).expect("overflow while adding NonZeroUsizes")
+}
+
+/// Set up logging
+fn setup_logging() -> syslog::Result<()> {
+    syslog::init(
+        syslog::Facility::LOG_USER,
+        if cfg!(feature = "log-trace") {
+            LevelFilter::Trace
+        } else if cfg!(debug_assertions) {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Info
+        },
+        None,
+    )
 }
 
 /// Start downloading and processing a data file
@@ -229,34 +272,4 @@ async fn download_and_process(
         stats.add_entry(entry.with_context(context)?);
     }
     Ok(stats.finish_file())
-}
-
-/// Entry from the dataset
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Entry {
-    /// (Case-sensitive) n-gram whose frequency is being studied
-    //
-    // TODO: If string allocation/deallocation becomes a bottleneck, study
-    //       in-place deserialization like rkyv.
-    pub ngram: Ngram,
-
-    /// Year in which this frequency was recorded
-    pub year: Year,
-
-    /// Number of matches
-    pub match_count: NonZeroUsize,
-
-    /// Number of books in which matches were found
-    pub volume_count: NonZeroUsize,
-}
-
-/// Year of Gregorian Calendar
-pub type Year = isize;
-
-/// Case-sensitive n-gram
-pub type Ngram = Box<str>;
-
-/// Addition operator for NonZeroUsize
-pub fn add_nonzero_usize(x: NonZeroUsize, y: NonZeroUsize) -> NonZeroUsize {
-    NonZeroUsize::new(x.get() + y.get()).expect("overflow while adding NonZeroUsizes")
 }

@@ -26,7 +26,7 @@ pub struct FileStatsBuilder {
     /// For each n-gram case equivalence class, provides...
     /// - Total stats across the case equivalence class
     /// - Current case with top stats, and stats for this case
-    case_stats: HashMap<UniCase<Ngram>, CaseStats>,
+    file_stats: FileStats,
 }
 //
 impl FileStatsBuilder {
@@ -36,7 +36,7 @@ impl FileStatsBuilder {
             config,
             current_ngram: None,
             current_stats: None,
-            case_stats: HashMap::new(),
+            file_stats: FileStats::new(),
         }
     }
 
@@ -86,7 +86,7 @@ impl FileStatsBuilder {
     /// Export final statistics at end of dataset processing
     pub fn finish_file(mut self) -> FileStats {
         self.switch_ngram(None, None);
-        self.case_stats
+        self.file_stats
     }
 
     /// Integrate the current n-gram into the file statistics and switch to a
@@ -115,7 +115,7 @@ impl FileStatsBuilder {
             {
                 // If so, inject it into the global file statistics
                 log::trace!("Accepted n-gram {former_ngram:?} with {former_stats:?} into current file statistics");
-                match self.case_stats.entry(UniCase::new(former_ngram.clone())) {
+                match self.file_stats.entry(UniCase::new(former_ngram.clone())) {
                     hash_map::Entry::Occupied(o) => {
                         let o = o.into_mut();
                         log::trace!("Merged into existing case-equivalence class {o:#?}");
@@ -141,19 +141,19 @@ pub type FileStats = HashMap<UniCase<Ngram>, CaseStats>;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct NgramStats {
     /// Year of first occurence
-    pub first_year: Year,
+    first_year: Year,
 
     /// Year of last occurence
-    pub last_year: Year,
+    last_year: Year,
 
     /// Total number of matches over period of interest
-    pub match_count: NonZeroUsize,
+    match_count: NonZeroUsize,
 
     /// Lower bound on the number of books with matches over period of interest
     ///
     /// Is an exact count when the stats only cover a single n-gram casing, but
     /// becomes a lower bound as soon as case classes are merged.
-    pub min_volume_count: NonZeroUsize,
+    min_volume_count: NonZeroUsize,
 }
 //
 impl NgramStats {
@@ -232,8 +232,8 @@ impl PartialOrd for NgramStats {
     }
 }
 
-/// Cumulative knowledge for a given n-gram case equivalence class
-#[derive(Debug)]
+/// Cumulative knowledge about an n-gram case equivalence class
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaseStats {
     /// Accumulated stats across the entire case equivalence class
     pub total_stats: NgramStats,

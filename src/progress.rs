@@ -34,7 +34,10 @@ impl ProgressReport {
         let bytes = ProgressBar::new(0)
             .with_prefix("Downloading and processing data")
             .with_style(
-                ProgressStyle::with_template("{prefix} {wide_bar} {bytes}/{total_bytes}").unwrap(),
+                ProgressStyle::with_template(
+                    "{prefix} {wide_bar} {bytes}/{total_bytes} ({bytes_per_sec})",
+                )
+                .unwrap(),
             );
 
         // Prepare to track n-gram sorting
