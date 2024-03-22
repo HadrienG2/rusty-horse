@@ -39,7 +39,7 @@ impl ProgressReport {
 
         // Prepare to track n-gram sorting
         let sort = ProgressBar::new(0)
-            .with_prefix("Ordering n-grams by frequency")
+            .with_prefix("Sorting/selecting n-grams by frequency")
             .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         Arc::new(Self {
             multi,

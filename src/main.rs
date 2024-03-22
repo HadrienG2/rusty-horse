@@ -16,7 +16,7 @@ use reqwest::Response;
 use serde::Deserialize;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{hash_map, BinaryHeap, HashMap},
+    collections::{hash_map, BinaryHeap, HashMap, VecDeque},
     io::{self, ErrorKind},
     num::NonZeroUsize,
     sync::Arc,
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
     let mut top_entries = if let Some(max_outputs) = args.max_outputs {
         BinaryHeap::with_capacity(max_outputs.get())
     } else {
-        BinaryHeap::new()
+        BinaryHeap::with_capacity(full_stats.len())
     };
     for (_, case_stats) in full_stats.drain() {
         top_entries.push((Reverse(case_stats.total_stats), case_stats.top_ngram));
@@ -181,9 +181,9 @@ async fn main() -> Result<()> {
     }
 
     // Reorder the results by decreasing frequency for final display
-    let mut ngrams_by_decreasing_stats = Vec::with_capacity(top_entries.len());
+    let mut ngrams_by_decreasing_stats = VecDeque::with_capacity(top_entries.len());
     while let Some((rev_stats, ngram)) = top_entries.pop() {
-        ngrams_by_decreasing_stats.push((ngram, rev_stats.0));
+        ngrams_by_decreasing_stats.push_front((ngram, rev_stats.0));
     }
 
     // TODO: Do something sensible with output
