@@ -24,7 +24,7 @@ pub fn pick_top_ngrams(
             .collect();
     }
 
-    // Sort n-grams by frequency and pick the most frequent ones if requested
+    // Sort n-grams by frequency, picking the most frequent ones if requested
     report.start_sort(full_stats.len());
     let mut top_entries = if let Some(max_outputs) = config.max_outputs {
         BinaryHeap::with_capacity(max_outputs.get())
@@ -42,7 +42,7 @@ pub fn pick_top_ngrams(
         report.inc_sorted(1);
     }
 
-    // Don't waste time ordering the output unless we're asked to
+    // Don't waste time producing a sorted output unless we're asked to do so
     if config.sort_by_popularity {
         let mut ngrams_by_decreasing_stats = VecDeque::with_capacity(top_entries.len());
         while let Some((_, ngram)) = top_entries.pop() {
