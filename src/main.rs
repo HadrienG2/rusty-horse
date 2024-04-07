@@ -50,29 +50,23 @@ pub struct Args {
     ///
     /// By default, we include books starting 50 years before the date where the
     /// Ngrams dataset was published.
-    #[arg(short = 'y', long, default_value = None)]
+    #[arg(short = 'y', long, default_value = "1950")]
     min_year: Option<Year>,
 
     /// Minimum accepted number of matches across of books
     ///
     /// Extremely rare words are not significantly more memorable than random
-    /// characters. Therefore we ignore words which occur extremely rarely in
-    /// the selected dataset section.
-    //
-    // TODO: Fine-tune default based on empirically observed irrelevance
-    //       threshold
-    #[arg(short = 'm', long, default_value_t = 100)]
+    /// characters. Therefore we ignore words which occur too rarely in the
+    /// selected dataset section.
+    #[arg(short = 'm', long, default_value_t = 5000)]
     min_matches: usize,
 
     /// Minimum accepted number of matching books
     ///
     /// If a word only appears in a book or two, it may be a neologism from the
     /// author, or the product of an error in the book -> text conversion
-    /// process. Therefore, we only consider words which appear across a
+    /// process. Therefore, we only consider words which are seen in a
     /// sufficiently large number of books.
-    //
-    // TODO: Fine-tune default based on empirically observed irrelevance
-    //       threshold
     #[arg(short = 'b', long, default_value_t = 10)]
     min_books: usize,
 
@@ -83,7 +77,7 @@ pub struct Args {
     /// right from the start allows this program to discard less frequent
     /// n-grams before the full list of n-grams is available. As a result, the
     /// processing will consume less memory and run a little faster.
-    #[arg(short = 'n', long, default_value = None)]
+    #[arg(short = 'n', long, default_value = "32768")]
     max_outputs: Option<NonZeroUsize>,
 }
 //
@@ -173,14 +167,15 @@ async fn main() -> Result<()> {
         report.inc_sorted(1);
     }
 
-    // Reorder the results by decreasing frequency for final display
+    // Discard stats and reorder the results by decreasing frequency for final
+    // display
     let mut ngrams_by_decreasing_stats = VecDeque::with_capacity(top_entries.len());
-    while let Some((rev_stats, ngram)) = top_entries.pop() {
-        ngrams_by_decreasing_stats.push_front((ngram, rev_stats.0));
+    while let Some((_, ngram)) = top_entries.pop() {
+        ngrams_by_decreasing_stats.push_front(ngram);
     }
-
-    // TODO: Do something sensible with output
-    println!("{ngrams_by_decreasing_stats:#?}");
+    for ngram in ngrams_by_decreasing_stats {
+        println!("{ngram}");
+    }
 
     Ok(())
 }
@@ -253,8 +248,7 @@ async fn download_and_process(
         .with_context(context)?;
     report.start_download(response.content_length().with_context(context)?);
 
-    // Process the byte stream into deserialized TSV records
-    let context = || format!("fetching and processing {url}");
+    // Slice the download into chunks of bytes
     let gz_bytes = StreamReader::new(response.bytes_stream().map(|res| {
         res
             // Track how many input bytes have been downloaded so far
@@ -262,13 +256,20 @@ async fn download_and_process(
             // Translate reqwest errors into I/O errors
             .map_err(|e| io::Error::new(ErrorKind::Other, Box::new(e)))
     }));
+
+    // Apply gzip decoder to compressed bytes
     let tsv_bytes = GzipDecoder::new(gz_bytes);
+
+    // Apply TSV decoder to uncompressed bytes
     let mut entries = AsyncReaderBuilder::new()
         .delimiter(b'\t')
         .has_headers(false)
         .create_deserializer(tsv_bytes)
         .into_deserialize::<Entry>();
+
+    // Accumulate statistics from TSV entries
     let mut stats = FileStatsBuilder::new(args);
+    let context = || format!("fetching and processing {url}");
     while let Some(entry) = entries.next().await {
         stats.add_entry(entry.with_context(context)?);
     }
