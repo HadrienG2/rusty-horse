@@ -30,8 +30,8 @@ use tokio_util::io::StreamReader;
 
 /// TODO: User-visible program description
 ///
-/// All occurence count cutoffs are applied to the total occurence count over
-/// the time period of interest.
+/// All occurence count cutoffs are applied to the total occurence count of a
+/// single casing of the word, over the time period of interest.
 #[derive(Parser, Debug)]
 pub struct Args {
     /// Short name of the Google Ngrams language to be used, e.g. "eng-fiction"
@@ -41,6 +41,7 @@ pub struct Args {
     language: Option<Box<str>>,
 
     // TODO: "Bad word" exclusion mechanism
+    //
     /// Minimum accepted book publication year
     ///
     /// Our data set is based on books, many of which have been published a long
@@ -187,9 +188,6 @@ pub const DATASET_PUBLICATION_YEAR: Year = 2012;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Entry {
     /// (Case-sensitive) n-gram whose frequency is being studied
-    //
-    // TODO: If string allocation/deallocation becomes a bottleneck, study
-    //       in-place deserialization like rkyv.
     pub ngram: Ngram,
 
     /// Year in which this frequency was recorded
