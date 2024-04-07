@@ -145,7 +145,7 @@ async fn main() -> Result<()> {
     while let Some(file_stats) = data_files.join_next().await {
         for (name, stats) in file_stats?? {
             match dataset_stats.entry(name) {
-                hash_map::Entry::Occupied(o) => o.into_mut().merge(stats),
+                hash_map::Entry::Occupied(o) => o.into_mut().merge_files(stats),
                 hash_map::Entry::Vacant(v) => {
                     v.insert(stats);
                 }
@@ -161,7 +161,8 @@ async fn main() -> Result<()> {
         BinaryHeap::with_capacity(dataset_stats.len())
     };
     for (_, case_stats) in dataset_stats.drain() {
-        top_entries.push((Reverse(case_stats.total_stats), case_stats.top_ngram));
+        let (top_ngram, total_stats) = case_stats.collect();
+        top_entries.push((Reverse(total_stats), top_ngram));
         if let Some(max_outputs) = args.max_outputs {
             if top_entries.len() > max_outputs.get() {
                 top_entries.pop();

@@ -10,6 +10,11 @@ use std::{
 use unicase::UniCase;
 
 /// Cumulative knowledge from a data file
+///
+/// Accumulated using [`FileStatsBuilder`]
+pub type FileStats = HashMap<UniCase<Ngram>, CaseStats>;
+
+/// Cumulative knowledge from a data file
 #[derive(Debug)]
 pub struct FileStatsBuilder {
     /// Data collection configuration
@@ -45,17 +50,12 @@ impl FileStatsBuilder {
     /// Dataset entries should be added in the order where they come in data
     /// files: sorted by ngram, then by year.
     pub fn add_entry(&mut self, entry: Entry) {
-        // Make sure there is a current n-gram
-        let current_ngram = self
-            .current_ngram
-            .get_or_insert_with(|| entry.ngram.clone());
-
         // Reject various flavors of invalid entries
         let too_old = entry.year < self.config.min_year();
         let not_a_word = entry.ngram.contains('_');
         if too_old || not_a_word {
             #[cfg(feature = "log-trace")]
-            if *current_ngram != entry.ngram {
+            if self.current_ngram.as_ref() != Some(&entry.ngram) {
                 let cause = if too_old {
                     "it's too old"
                 } else if not_a_word {
@@ -71,9 +71,9 @@ impl FileStatsBuilder {
 
         // If the entry is associated with the current n-gram, merge it into the
         // current n-gram's statistics
-        if let Some(current_stats) = &mut self.current_stats {
-            if *current_ngram == entry.ngram {
-                current_stats.add_entry(entry);
+        if let Some((stats, ngram)) = self.current_stats_and_ngram() {
+            if *ngram == entry.ngram {
+                stats.add_year(entry);
                 return;
             }
         }
@@ -87,6 +87,17 @@ impl FileStatsBuilder {
     pub fn finish_file(mut self) -> FileStats {
         self.switch_ngram(None, None);
         self.file_stats
+    }
+
+    /// Get the current stats, if any, along with the associated n-gram
+    fn current_stats_and_ngram(&mut self) -> Option<(&mut NgramStats, &Ngram)> {
+        self.current_stats.as_mut().map(|stats| {
+            let ngram = self
+                .current_ngram
+                .as_ref()
+                .expect("If there are current stats, there should be an associated n-gram");
+            (stats, ngram)
+        })
     }
 
     /// Integrate the current n-gram into the file statistics and switch to a
@@ -119,7 +130,7 @@ impl FileStatsBuilder {
                     hash_map::Entry::Occupied(o) => {
                         let o = o.into_mut();
                         log::trace!("Merged into existing case-equivalence class {o:#?}");
-                        o.add_ngram(former_ngram, former_stats);
+                        o.add_casing(former_ngram, former_stats);
                         log::trace!("Result of equivalence class merging is {o:#?}");
                     }
                     hash_map::Entry::Vacant(v) => {
@@ -134,20 +145,17 @@ impl FileStatsBuilder {
     }
 }
 
-/// Cumulative knowledge from a data file
-pub type FileStats = HashMap<UniCase<Ngram>, CaseStats>;
-
 /// Cumulative knowledge about an n-gram case equivalence class
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaseStats {
     /// Accumulated stats across the entire case equivalence class
-    pub total_stats: NgramStats,
+    total_stats: NgramStats,
 
     /// Casing with the best stats
-    pub top_ngram: Ngram,
+    top_casing: Ngram,
 
     /// Case-sensitive stats for this casing
-    pub top_stats: NgramStats,
+    top_stats: NgramStats,
 }
 //
 impl CaseStats {
@@ -155,7 +163,7 @@ impl CaseStats {
     pub fn new(ngram: Ngram, stats: NgramStats) -> Self {
         Self {
             total_stats: stats,
-            top_ngram: ngram,
+            top_casing: ngram,
             top_stats: stats,
         }
     }
@@ -164,14 +172,14 @@ impl CaseStats {
     ///
     /// It is assumed that you have checked that this n-gram is indeed
     /// case-equivalent to the one that the stats were created with.
-    pub fn add_ngram(&mut self, ngram: Ngram, stats: NgramStats) {
+    pub fn add_casing(&mut self, ngram: Ngram, stats: NgramStats) {
         // Sanity checks
         debug_assert!(
             self.total_stats >= self.top_stats,
             "total_stats should integrate the top casing's stats and then some"
         );
         assert_ne!(
-            ngram, self.top_ngram,
+            ngram, self.top_casing,
             "this n-gram was already added to this case class!"
         );
 
@@ -181,7 +189,7 @@ impl CaseStats {
         // If this n-gram has better stats than the previous top ngram, it
         // becomes the new top n-gram.
         if stats > self.top_stats {
-            self.top_ngram = ngram;
+            self.top_casing = ngram;
             self.top_stats = stats;
         }
     }
@@ -190,18 +198,23 @@ impl CaseStats {
     ///
     /// You should have checked that the case equivalence class you're merging
     /// is indeed equivalent to this one.
-    pub fn merge(&mut self, rhs: CaseStats) {
+    pub fn merge_files(&mut self, rhs: CaseStats) {
         debug_assert!(
             self.total_stats >= self.top_stats,
             "total_stats should integrate the top casing's stats and then some"
         );
         self.total_stats.merge_cases(rhs.total_stats);
-        if rhs.top_ngram == self.top_ngram {
+        if rhs.top_casing == self.top_casing {
             self.top_stats.merge_cases(rhs.top_stats);
         } else if rhs.top_stats > self.top_stats {
-            self.top_ngram = rhs.top_ngram;
+            self.top_casing = rhs.top_casing;
             self.top_stats = rhs.top_stats;
         }
+    }
+
+    /// Extract the top spelling and case-insensitive statistics
+    pub fn collect(self) -> (Ngram, NgramStats) {
+        (self.top_casing, self.total_stats)
     }
 }
 
@@ -240,7 +253,7 @@ impl NgramStats {
     ///
     /// Yearly entries should be merged in the order that they appear in data
     /// files, i.e. from least recent to most recent.
-    pub fn add_entry(&mut self, entry: Entry) {
+    pub fn add_year(&mut self, entry: Entry) {
         debug_assert!(
             self.first_year <= self.last_year,
             "Violated first < last year type invariant"
