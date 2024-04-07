@@ -1,12 +1,21 @@
 //! Supported Google Books Ngrams languages
 
-use crate::Result;
+use crate::{Args, Result};
 use anyhow::Context;
 use dialoguer::FuzzySelect;
 use std::sync::OnceLock;
 
+/// Pick a language as directed by the CLI arguments
+pub fn pick(args: &Args) -> Result<LanguageInfo> {
+    if let Some(language) = &args.language {
+        get_language(language)
+    } else {
+        prompt_language()
+    }
+}
+
 /// Get information about a language dictionary
-pub fn get(short_name: &str) -> Result<LanguageInfo> {
+fn get_language(short_name: &str) -> Result<LanguageInfo> {
     supported_languages()
         .iter()
         .find(|(_long_name, lang)| lang.short_name == short_name)
@@ -15,7 +24,7 @@ pub fn get(short_name: &str) -> Result<LanguageInfo> {
 }
 
 /// Ask the user to select a language dictionary
-pub fn prompt() -> dialoguer::Result<LanguageInfo> {
+fn prompt_language() -> Result<LanguageInfo> {
     let languages = supported_languages();
     let language_names = languages
         .iter()

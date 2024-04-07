@@ -1,6 +1,6 @@
 //! N-gram usage statistics
 
-use crate::{add_nonzero_usize, Config, Entry, Ngram, Year};
+use crate::{add_nonzero_usize, config::Config, file::Entry, Ngram, Year};
 use std::{
     cmp::Ordering,
     collections::{hash_map, HashMap},

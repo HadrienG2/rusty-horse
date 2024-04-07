@@ -2,32 +2,19 @@
 //! documentation you can find at
 //! <http://storage.googleapis.com/books/ngrams/books/datasetsv3.html>.
 
+mod config;
+mod file;
 mod languages;
 mod progress;
 mod stats;
+mod top;
 
-use crate::{
-    progress::ProgressReport,
-    stats::{FileStats, FileStatsBuilder},
-};
+use crate::{config::Config, progress::ProgressReport, stats::FileStats};
 use anyhow::Context;
-use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
-use csv_async::AsyncReaderBuilder;
-use futures::stream::StreamExt;
-use languages::LanguageInfo;
 use log::LevelFilter;
-use reqwest::Response;
-use serde::Deserialize;
-use std::{
-    cmp::Reverse,
-    collections::{hash_map, BinaryHeap, VecDeque},
-    io::{self, ErrorKind},
-    num::NonZeroUsize,
-    sync::Arc,
-};
+use std::{collections::hash_map, num::NonZeroUsize};
 use tokio::task::JoinSet;
-use tokio_util::io::StreamReader;
 
 /// TODO: User-visible program description
 ///
@@ -49,7 +36,7 @@ struct Args {
     /// a capital letter tend to be an odd passphrase building block. But this
     /// is not always true, one exception being German. By default, we ignore
     /// capitalized words for every language where it makes sense to do so.
-    #[arg(short, long, default_value_t = true)]
+    #[arg(long, default_value_t = true)]
     strip_odd_capitalized: bool,
 
     /// Minimum accepted book publication year
@@ -88,8 +75,18 @@ struct Args {
     /// right from the start allows this program to discard less frequent
     /// n-grams before the full list of n-grams is available. As a result, the
     /// processing will consume less memory and run a little faster.
-    #[arg(short = 'n', long, default_value = "32768")]
+    #[arg(long, default_value = "32768")]
     max_outputs: Option<NonZeroUsize>,
+
+    /// Sort output n-grams in order of decreasing match count
+    ///
+    /// When adjusting rejection settings, it is usually best to order outputs
+    /// by decreasing occurence count. But that requires some post-processing,
+    /// and is unnecessary in the usual workflow where words are randomly picked
+    /// from the list. Therefore, consider disabling this once you're done
+    /// tuning the filter cut-offs.
+    #[arg(short, long, default_value_t = false)]
+    sort_by_popularity: bool,
 }
 //
 impl Args {
@@ -122,23 +119,19 @@ async fn main() -> Result<()> {
     // Decode CLI arguments
     let args = Args::parse_and_check()?;
 
-    // Let the user pick a language
-    let language = if let Some(language) = &args.language {
-        languages::get(language)?
-    } else {
-        languages::prompt()?
-    };
+    // Pick a book language
+    let language = languages::pick(&args)?;
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
-    let config = Config::new(args, language);
 
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
 
     // Start all the data file downloading and processing
+    let config = Config::new(args, language);
     let client = reqwest::Client::new();
     let mut data_files = JoinSet::new();
     for url in dataset_urls {
-        data_files.spawn(download_and_process(
+        data_files.spawn(file::download_and_process(
             config.clone(),
             client.clone(),
             url,
@@ -159,102 +152,22 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Sort n-grams by frequency and pick the most frequent ones if requested
-    report.start_sort(dataset_stats.len());
-    let mut top_entries = if let Some(max_outputs) = config.max_outputs {
-        BinaryHeap::with_capacity(max_outputs.get())
-    } else {
-        BinaryHeap::with_capacity(dataset_stats.len())
-    };
-    for (_, case_stats) in dataset_stats.drain() {
-        let (top_ngram, total_stats) = case_stats.collect();
-        top_entries.push((Reverse(total_stats), top_ngram));
-        if let Some(max_outputs) = config.max_outputs {
-            if top_entries.len() > max_outputs.get() {
-                top_entries.pop();
-            }
-        }
-        // NOTE: If these atomic increments become too expensive, use
-        //       batched iteration to amortize them
-        report.inc_sorted(1);
-    }
-
-    // Discard stats and reorder the results by decreasing frequency for final
-    // display
-    let mut ngrams_by_decreasing_stats = VecDeque::with_capacity(top_entries.len());
-    while let Some((_, ngram)) = top_entries.pop() {
-        ngrams_by_decreasing_stats.push_front(ngram);
-    }
+    // Pick the most frequent n-grams across all data files
+    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, dataset_stats, &report);
     for ngram in ngrams_by_decreasing_stats {
         println!("{ngram}");
     }
-
     Ok(())
 }
 
-/// Final process configuration
-///
-/// This is the result of combining digested [`Args`] with language-specific
-/// considerations.
-#[derive(Debug)]
-pub struct Config {
-    // TODO: "Bad word" exclusion mechanism
-    //
-    /// Whether capitalized n-grams should be ignored
-    strip_capitalized: bool,
-
-    /// Minimum accepted book publication year
-    min_year: Year,
-
-    /// Minimum accepted number of matches across of books
-    min_matches: usize,
-
-    /// Minimum accepted number of matching books
-    min_books: usize,
-
-    /// Maximal number of output n-grams
-    max_outputs: Option<NonZeroUsize>,
-}
-//
-impl Config {
-    /// Determine process configuration from initialization products
-    fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
-        let min_year = args.min_year();
-        let Args { language: _, strip_odd_capitalized, min_year: _, min_matches, min_books, max_outputs } = args;
-        Arc::new(Self {
-            strip_capitalized: strip_odd_capitalized && language.should_strip_capitalized,
-            min_year,
-            min_matches,
-            min_books,
-            max_outputs,
-        })
-    }
-}
+/// Use anyhow for Result type erasure
+pub use anyhow::Result;
 
 /// Year where the dataset that we use was published
 pub const DATASET_PUBLICATION_YEAR: Year = 2012;
 
-/// Entry from the dataset
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Entry {
-    /// (Case-sensitive) n-gram whose frequency is being studied
-    pub ngram: Ngram,
-
-    /// Year in which this frequency was recorded
-    pub year: Year,
-
-    /// Number of matches
-    pub match_count: NonZeroUsize,
-
-    /// Number of books in which matches were found
-    pub volume_count: NonZeroUsize,
-}
-
 /// Case-sensitive n-gram
 pub type Ngram = Box<str>;
-
-/// Use anyhow for Result type erasure
-pub use anyhow::Result;
 
 /// Year of Gregorian Calendar
 pub type Year = isize;
@@ -277,49 +190,4 @@ fn setup_logging() -> syslog::Result<()> {
         },
         None,
     )
-}
-
-/// Start downloading and processing a data file
-async fn download_and_process(
-    config: Arc<Config>,
-    client: reqwest::Client,
-    url: Box<str>,
-    report: Arc<ProgressReport>,
-) -> Result<FileStats> {
-    // Start the download
-    let context = || format!("initiating download of {url}");
-    let response = client
-        .get(&*url)
-        .send()
-        .await
-        .and_then(Response::error_for_status)
-        .with_context(context)?;
-    report.start_download(response.content_length().with_context(context)?);
-
-    // Slice the download into chunks of bytes
-    let gz_bytes = StreamReader::new(response.bytes_stream().map(|res| {
-        res
-            // Track how many input bytes have been downloaded so far
-            .inspect(|bytes_block| report.inc_bytes(bytes_block.len()))
-            // Translate reqwest errors into I/O errors
-            .map_err(|e| io::Error::new(ErrorKind::Other, Box::new(e)))
-    }));
-
-    // Apply gzip decoder to compressed bytes
-    let tsv_bytes = GzipDecoder::new(gz_bytes);
-
-    // Apply TSV decoder to uncompressed bytes
-    let mut entries = AsyncReaderBuilder::new()
-        .delimiter(b'\t')
-        .has_headers(false)
-        .create_deserializer(tsv_bytes)
-        .into_deserialize::<Entry>();
-
-    // Accumulate statistics from TSV entries
-    let mut stats = FileStatsBuilder::new(config.clone());
-    let context = || format!("fetching and processing {url}");
-    while let Some(entry) = entries.next().await {
-        stats.add_entry(entry.with_context(context)?);
-    }
-    Ok(stats.finish_file())
 }
