@@ -59,7 +59,7 @@ impl FileStatsBuilder {
                 .next()
                 .expect("n-grams shouldn't be empty")
                 .is_uppercase();
-        let not_a_word = entry.ngram.contains('_');
+        let not_a_word = entry.ngram.contains(['_', '.']);
         if too_old || capitalized || not_a_word {
             #[cfg(feature = "log-trace")]
             if self.current_ngram.as_ref() != Some(&entry.ngram) {

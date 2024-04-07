@@ -75,7 +75,7 @@ struct Args {
     /// right from the start allows this program to discard less frequent
     /// n-grams before the full list of n-grams is available. As a result, the
     /// processing will consume less memory and run a little faster.
-    #[arg(long, default_value = "32768")]
+    #[arg(short = 'o', long, default_value = "32768")]
     max_outputs: Option<NonZeroUsize>,
 
     /// Sort output n-grams in order of decreasing match count
