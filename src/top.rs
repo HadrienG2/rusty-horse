@@ -1,6 +1,7 @@
 //! Select the top n-grams from the final aggregated data set
 
 use crate::{config::Config, progress::ProgressReport, stats::FileStats, Ngram};
+use rayon::prelude::*;
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, VecDeque},
@@ -12,6 +13,17 @@ pub fn pick_top_ngrams(
     full_stats: FileStats,
     report: &ProgressReport,
 ) -> Vec<Ngram> {
+    // If the output is unbounded and unsorted, just dump the ngrams quickly
+    if config.max_outputs.is_none() && !config.sort_by_popularity {
+        return full_stats
+            .into_par_iter()
+            .map(|(_, case_stats)| {
+                let (top_ngram, _total_stats) = case_stats.collect();
+                top_ngram
+            })
+            .collect();
+    }
+
     // Sort n-grams by frequency and pick the most frequent ones if requested
     report.start_sort(full_stats.len());
     let mut top_entries = if let Some(max_outputs) = config.max_outputs {

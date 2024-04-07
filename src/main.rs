@@ -56,7 +56,7 @@ struct Args {
     /// Extremely rare words are not significantly more memorable than random
     /// characters. Therefore we ignore words which occur too rarely in the
     /// selected dataset section.
-    #[arg(short = 'm', long, default_value_t = 5000)]
+    #[arg(short = 'm', long, default_value_t = 6000)]
     min_matches: usize,
 
     /// Minimum accepted number of matching books
