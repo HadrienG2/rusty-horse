@@ -39,6 +39,19 @@ pub struct LanguageInfo {
     /// Valid word prefixes
     // NOTE: We only care about words because words are most memorable
     pub word_prefixes: &'static [Box<str>],
+
+    /// Does it make sense to strip capitalized words?
+    ///
+    /// In most languages from the Google Books dataset, most words that start
+    /// with a capital letter make an odd choice of passphrase building block.
+    /// They are things like titles ("M.", "Ms."), proper nouns (which have a
+    /// high potential of yielding an inflammatory result when combined with
+    /// adjectives), Roman Numerals, isolated letters or acronyms.
+    ///
+    /// However, there are exceptions. For example, stripping capitalized words
+    /// makes no sense in German, as you are basically throwing away every
+    /// common noun. Hence there needs to be some metadata for this.
+    pub should_strip_capitalized: bool,
 }
 //
 impl LanguageInfo {
@@ -66,6 +79,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "eng",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             (
@@ -73,6 +87,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "eng-us",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             (
@@ -80,6 +95,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "eng-gb",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             (
@@ -87,6 +103,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "eng-fiction",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             // NOTE: To add Chinese support, need help from a speaker to tell
@@ -96,6 +113,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "fre",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             (
@@ -103,6 +121,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "ger",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: false,
                 },
             ),
             // NOTE: To add Hebrew support, need help from a speaker to tell
@@ -112,6 +131,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "ita",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
             // NOTE: To add Russian support, need help from a speaker to tell
@@ -121,6 +141,7 @@ fn supported_languages() -> &'static [(&'static str, LanguageInfo)] {
                 LanguageInfo {
                     short_name: "spa",
                     word_prefixes: latin_word_prefixes(),
+                    should_strip_capitalized: true,
                 },
             ),
         ]

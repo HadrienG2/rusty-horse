@@ -1,6 +1,6 @@
 //! N-gram usage statistics
 
-use crate::{add_nonzero_usize, Args, Entry, Ngram, Year};
+use crate::{add_nonzero_usize, Config, Entry, Ngram, Year};
 use std::{
     cmp::Ordering,
     collections::{hash_map, HashMap},
@@ -18,7 +18,7 @@ pub type FileStats = HashMap<UniCase<Ngram>, CaseStats>;
 #[derive(Debug)]
 pub struct FileStatsBuilder {
     /// Data collection configuration
-    config: Arc<Args>,
+    config: Arc<Config>,
 
     /// Last n-gram seen within the file, if any
     current_ngram: Option<Ngram>,
@@ -36,7 +36,7 @@ pub struct FileStatsBuilder {
 //
 impl FileStatsBuilder {
     /// Set up the accumulator
-    pub fn new(config: Arc<Args>) -> Self {
+    pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,
             current_ngram: None,
@@ -51,15 +51,24 @@ impl FileStatsBuilder {
     /// files: sorted by ngram, then by year.
     pub fn add_entry(&mut self, entry: Entry) {
         // Reject various flavors of invalid entries
-        let too_old = entry.year < self.config.min_year();
+        let too_old = entry.year < self.config.min_year;
+        let capitalized = self.config.strip_capitalized
+            && entry
+                .ngram
+                .chars()
+                .next()
+                .expect("n-grams shouldn't be empty")
+                .is_uppercase();
         let not_a_word = entry.ngram.contains('_');
-        if too_old || not_a_word {
+        if too_old || capitalized || not_a_word {
             #[cfg(feature = "log-trace")]
             if self.current_ngram.as_ref() != Some(&entry.ngram) {
                 let cause = if too_old {
                     "it's too old"
+                } else if capitalized {
+                    "the n-gram is capitalized"
                 } else if not_a_word {
-                    "it isn't a word"
+                    "the n-gram isn't a word"
                 } else {
                     unimplemented!()
                 };

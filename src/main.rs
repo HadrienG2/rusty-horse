@@ -15,6 +15,7 @@ use async_compression::tokio::bufread::GzipDecoder;
 use clap::Parser;
 use csv_async::AsyncReaderBuilder;
 use futures::stream::StreamExt;
+use languages::LanguageInfo;
 use log::LevelFilter;
 use reqwest::Response;
 use serde::Deserialize;
@@ -33,7 +34,7 @@ use tokio_util::io::StreamReader;
 /// All occurence count cutoffs are applied to the total occurence count of a
 /// single casing of the word, over the time period of interest.
 #[derive(Parser, Debug)]
-pub struct Args {
+struct Args {
     /// Short name of the Google Ngrams language to be used, e.g. "eng-fiction"
     ///
     /// Will interactively prompt for a supported language if not specified.
@@ -42,6 +43,15 @@ pub struct Args {
 
     // TODO: "Bad word" exclusion mechanism
     //
+    /// Strip capitalized words, if it makes sense for the target language
+    ///
+    /// In most languages from the Google Books dataset, n-grams that start with
+    /// a capital letter tend to be an odd passphrase building block. But this
+    /// is not always true, one exception being German. By default, we ignore
+    /// capitalized words for every language where it makes sense to do so.
+    #[arg(short, long, default_value_t = true)]
+    strip_odd_capitalized: bool,
+
     /// Minimum accepted book publication year
     ///
     /// Our data set is based on books, many of which have been published a long
@@ -50,8 +60,8 @@ pub struct Args {
     /// year, at the cost of reducing the size of the dataset.
     ///
     /// By default, we include books starting 50 years before the date where the
-    /// Ngrams dataset was published.
-    #[arg(short = 'y', long, default_value = "1950")]
+    /// n-grams dataset was published.
+    #[arg(short = 'y', long, default_value = None)]
     min_year: Option<Year>,
 
     /// Minimum accepted number of matches across of books
@@ -84,9 +94,9 @@ pub struct Args {
 //
 impl Args {
     /// Decode and validate CLI arguments
-    pub fn parse_and_check() -> Result<Arc<Self>> {
+    pub fn parse_and_check() -> Result<Self> {
         // Decode CLI arguments
-        let args = Arc::new(Args::parse());
+        let args = Args::parse();
 
         // Check CLI arguments for basic sanity
         if let Some(min_year) = args.min_year {
@@ -119,6 +129,7 @@ async fn main() -> Result<()> {
         languages::prompt()?
     };
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
+    let config = Config::new(args, language);
 
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
@@ -128,7 +139,7 @@ async fn main() -> Result<()> {
     let mut data_files = JoinSet::new();
     for url in dataset_urls {
         data_files.spawn(download_and_process(
-            args.clone(),
+            config.clone(),
             client.clone(),
             url,
             report.clone(),
@@ -138,7 +149,7 @@ async fn main() -> Result<()> {
     // Collect and merge statistics from data files as downloads finish
     let mut dataset_stats = FileStats::new();
     while let Some(file_stats) = data_files.join_next().await {
-        for (name, stats) in file_stats?? {
+        for (name, stats) in file_stats.context("collecting results from one data file")?? {
             match dataset_stats.entry(name) {
                 hash_map::Entry::Occupied(o) => o.into_mut().merge_files(stats),
                 hash_map::Entry::Vacant(v) => {
@@ -150,7 +161,7 @@ async fn main() -> Result<()> {
 
     // Sort n-grams by frequency and pick the most frequent ones if requested
     report.start_sort(dataset_stats.len());
-    let mut top_entries = if let Some(max_outputs) = args.max_outputs {
+    let mut top_entries = if let Some(max_outputs) = config.max_outputs {
         BinaryHeap::with_capacity(max_outputs.get())
     } else {
         BinaryHeap::with_capacity(dataset_stats.len())
@@ -158,7 +169,7 @@ async fn main() -> Result<()> {
     for (_, case_stats) in dataset_stats.drain() {
         let (top_ngram, total_stats) = case_stats.collect();
         top_entries.push((Reverse(total_stats), top_ngram));
-        if let Some(max_outputs) = args.max_outputs {
+        if let Some(max_outputs) = config.max_outputs {
             if top_entries.len() > max_outputs.get() {
                 top_entries.pop();
             }
@@ -179,6 +190,45 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Final process configuration
+///
+/// This is the result of combining digested [`Args`] with language-specific
+/// considerations.
+#[derive(Debug)]
+pub struct Config {
+    // TODO: "Bad word" exclusion mechanism
+    //
+    /// Whether capitalized n-grams should be ignored
+    strip_capitalized: bool,
+
+    /// Minimum accepted book publication year
+    min_year: Year,
+
+    /// Minimum accepted number of matches across of books
+    min_matches: usize,
+
+    /// Minimum accepted number of matching books
+    min_books: usize,
+
+    /// Maximal number of output n-grams
+    max_outputs: Option<NonZeroUsize>,
+}
+//
+impl Config {
+    /// Determine process configuration from initialization products
+    fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
+        let min_year = args.min_year();
+        let Args { language: _, strip_odd_capitalized, min_year: _, min_matches, min_books, max_outputs } = args;
+        Arc::new(Self {
+            strip_capitalized: strip_odd_capitalized && language.should_strip_capitalized,
+            min_year,
+            min_matches,
+            min_books,
+            max_outputs,
+        })
+    }
 }
 
 /// Year where the dataset that we use was published
@@ -231,7 +281,7 @@ fn setup_logging() -> syslog::Result<()> {
 
 /// Start downloading and processing a data file
 async fn download_and_process(
-    args: Arc<Args>,
+    config: Arc<Config>,
     client: reqwest::Client,
     url: Box<str>,
     report: Arc<ProgressReport>,
@@ -266,7 +316,7 @@ async fn download_and_process(
         .into_deserialize::<Entry>();
 
     // Accumulate statistics from TSV entries
-    let mut stats = FileStatsBuilder::new(args);
+    let mut stats = FileStatsBuilder::new(config.clone());
     let context = || format!("fetching and processing {url}");
     while let Some(entry) = entries.next().await {
         stats.add_entry(entry.with_context(context)?);
