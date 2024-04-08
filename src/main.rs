@@ -9,12 +9,10 @@ mod progress;
 mod stats;
 mod top;
 
-use crate::{config::Config, progress::ProgressReport, stats::FileStats};
-use anyhow::Context;
+use crate::{config::Config, progress::ProgressReport};
 use clap::Parser;
 use log::LevelFilter;
-use std::{collections::hash_map, num::NonZeroUsize};
-use tokio::task::JoinSet;
+use std::num::NonZeroUsize;
 
 /// TODO: User-visible program description
 ///
@@ -126,34 +124,15 @@ async fn main() -> Result<()> {
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
 
-    // Start all the data file downloading and processing
+    // Compute dataset-wide statistics
     let config = Config::new(args, language);
     let client = reqwest::Client::new();
-    let mut data_files = JoinSet::new();
-    for url in dataset_urls {
-        data_files.spawn(file::download_and_process(
-            config.clone(),
-            client.clone(),
-            url,
-            report.clone(),
-        ));
-    }
-
-    // Collect and merge statistics from data files as downloads finish
-    let mut dataset_stats = FileStats::new();
-    while let Some(file_stats) = data_files.join_next().await {
-        for (name, stats) in file_stats.context("collecting results from one data file")?? {
-            match dataset_stats.entry(name) {
-                hash_map::Entry::Occupied(o) => o.into_mut().merge_files(stats),
-                hash_map::Entry::Vacant(v) => {
-                    v.insert(stats);
-                }
-            }
-        }
-    }
+    let full_stats =
+        file::download_and_process_all(config.clone(), client, dataset_urls, report.clone())
+            .await?;
 
     // Pick the most frequent n-grams across all data files
-    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, dataset_stats, &report);
+    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, full_stats, &report);
     for ngram in ngrams_by_decreasing_stats {
         println!("{ngram}");
     }

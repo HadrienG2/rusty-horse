@@ -12,12 +12,47 @@ use csv_async::AsyncReaderBuilder;
 use futures::stream::StreamExt;
 use reqwest::Response;
 use serde::Deserialize;
+use std::collections::hash_map;
 use std::{
     io::{self, ErrorKind},
     num::NonZeroUsize,
     sync::Arc,
 };
+use tokio::task::JoinSet;
 use tokio_util::io::StreamReader;
+
+/// Download and process a set of data files, merge results
+pub async fn download_and_process_all(
+    config: Arc<Config>,
+    client: reqwest::Client,
+    urls: impl IntoIterator<Item = Box<str>>,
+    report: Arc<ProgressReport>,
+) -> Result<FileStats> {
+    // Start downloading and processing all the files
+    let mut data_files = JoinSet::new();
+    for url in urls {
+        data_files.spawn(download_and_process(
+            config.clone(),
+            client.clone(),
+            url,
+            report.clone(),
+        ));
+    }
+
+    // Collect and merge statistics from data files as downloads finish
+    let mut dataset_stats = FileStats::new();
+    while let Some(file_stats) = data_files.join_next().await {
+        for (name, stats) in file_stats.context("collecting results from one data file")?? {
+            match dataset_stats.entry(name) {
+                hash_map::Entry::Occupied(o) => o.into_mut().merge_files(stats),
+                hash_map::Entry::Vacant(v) => {
+                    v.insert(stats);
+                }
+            }
+        }
+    }
+    Ok(dataset_stats)
+}
 
 /// Start downloading and processing a data file
 pub async fn download_and_process(
