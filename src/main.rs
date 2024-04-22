@@ -2,6 +2,7 @@
 //! documentation you can find at
 //! <http://storage.googleapis.com/books/ngrams/books/datasetsv3.html>.
 
+mod cache;
 mod config;
 mod file;
 mod languages;

@@ -48,7 +48,7 @@ impl FileStatsBuilder {
     /// Integrate a new dataset entry
     ///
     /// Dataset entries should be added in the order where they come in data
-    /// files: sorted by ngram, then by year.
+    /// files: sorted by ngram, then by increasing year.
     pub fn add_entry(&mut self, entry: Entry) {
         // Reject various flavors of invalid entries
         let too_old = entry.year < self.config.min_year;
