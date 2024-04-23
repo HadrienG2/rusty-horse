@@ -86,7 +86,8 @@ impl FileStatsBuilder {
             if former_stats.match_count.get() >= self.config.min_matches
                 && former_stats.min_volume_count.get() >= self.config.min_books
             {
-                // If so, start by removing grammar tags...
+                // If so, start by removing grammar tags so that it's merged
+                // with untagged versions of itself during case unification...
                 former_ngram = match file::remove_grammar_tags(former_ngram) {
                     Ok(ngram) => ngram,
                     Err(bad_ngram) => {
@@ -95,7 +96,7 @@ impl FileStatsBuilder {
                     }
                 };
 
-                // ...then inject it into the global file statistics
+                // ...then inject it into the case-insensitive file statistics
                 log::trace!("Accepted n-gram {former_ngram:?} with {former_stats:?} into current file statistics");
                 match self.file_stats.entry(UniCase::new(former_ngram.clone())) {
                     hash_map::Entry::Occupied(o) => {
@@ -109,7 +110,7 @@ impl FileStatsBuilder {
                     }
                 }
             } else {
-                // If not, just log it for posterity
+                // If the n-gram is rejected, log it for posterity
                 log::trace!("Rejected n-gram {former_ngram:?} with {former_stats:?} from file statistics due to insufficient occurences");
             }
         }
