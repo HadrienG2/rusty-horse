@@ -7,7 +7,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 ///
 /// This is the result of combining digested [`Args`] with language-specific
 /// considerations.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Config {
     // TODO: "Bad word" exclusion mechanism
     //

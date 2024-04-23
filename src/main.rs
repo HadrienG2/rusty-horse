@@ -17,8 +17,8 @@ use std::num::NonZeroUsize;
 
 /// TODO: User-visible program description
 ///
-/// All occurence count cutoffs are applied to the total occurence count of a
-/// single casing of the word, over the time period of interest.
+/// All occurence count cutoffs are applied to the occurence count of a single
+/// ngram (before case equivalence), over the time period of interest.
 #[derive(Parser, Debug)]
 struct Args {
     /// Short name of the Google Ngrams language to be used, e.g. "eng-fiction"
@@ -50,7 +50,7 @@ struct Args {
     #[arg(short = 'y', long, default_value = None)]
     min_year: Option<Year>,
 
-    /// Minimum accepted number of matches across of books
+    /// Minimum accepted number of matches across all books
     ///
     /// Extremely rare words are not significantly more memorable than random
     /// characters. Therefore we ignore words which occur too rarely in the
@@ -61,9 +61,8 @@ struct Args {
     /// Minimum accepted number of matching books
     ///
     /// If a word only appears in a book or two, it may be a neologism from the
-    /// author, or the product of an error in the book -> text conversion
-    /// process. Therefore, we only consider words which are seen in a
-    /// sufficiently large number of books.
+    /// author, or the product of an OCR error. Therefore, we only consider
+    /// words which are seen in a sufficiently large number of books.
     #[arg(short = 'b', long, default_value_t = 10)]
     min_books: usize,
 

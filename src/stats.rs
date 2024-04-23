@@ -1,6 +1,11 @@
 //! N-gram usage statistics
 
-use crate::{add_nonzero_usize, config::Config, file::Entry, Ngram, Year};
+use crate::{
+    add_nonzero_usize,
+    config::Config,
+    file::{self, Entry},
+    Ngram, Year,
+};
 use std::{
     cmp::Ordering,
     collections::{hash_map, HashMap},
@@ -20,11 +25,8 @@ pub struct FileStatsBuilder {
     /// Data collection configuration
     config: Arc<Config>,
 
-    /// Last n-gram seen within the file, if any
-    current_ngram: Option<Ngram>,
-
-    /// Accumulated stats from accepted entries for current_ngram, if any
-    current_stats: Option<NgramStats>,
+    /// Last accepted N-gram, if any, and accumulated stats associated with it
+    current_ngram_and_stats: Option<(Ngram, NgramStats)>,
 
     /// Accumulated stats across n-gram case equivalence classes
     ///
@@ -39,8 +41,7 @@ impl FileStatsBuilder {
     pub fn new(config: Arc<Config>) -> Self {
         Self {
             config,
-            current_ngram: None,
-            current_stats: None,
+            current_ngram_and_stats: None,
             file_stats: FileStats::new(),
         }
     }
@@ -50,37 +51,9 @@ impl FileStatsBuilder {
     /// Dataset entries should be added in the order where they come in data
     /// files: sorted by ngram, then by increasing year.
     pub fn add_entry(&mut self, entry: Entry) {
-        // Reject various flavors of invalid entries
-        let too_old = entry.year < self.config.min_year;
-        let capitalized = self.config.strip_capitalized
-            && entry
-                .ngram
-                .chars()
-                .next()
-                .expect("n-grams shouldn't be empty")
-                .is_uppercase();
-        let not_a_word = entry.ngram.contains(['_', '.']);
-        if too_old || capitalized || not_a_word {
-            #[cfg(feature = "log-trace")]
-            if self.current_ngram.as_ref() != Some(&entry.ngram) {
-                let cause = if too_old {
-                    "it's too old"
-                } else if capitalized {
-                    "the n-gram is capitalized"
-                } else if not_a_word {
-                    "the n-gram isn't a word"
-                } else {
-                    unimplemented!()
-                };
-                log::trace!("Rejected {entry:?} because {cause} (will not report further rejections for this n-gram)");
-                self.switch_ngram(Some(entry.ngram.clone()), None);
-            }
-            return;
-        }
-
         // If the entry is associated with the current n-gram, merge it into the
         // current n-gram's statistics
-        if let Some((stats, ngram)) = self.current_stats_and_ngram() {
+        if let Some((ngram, stats)) = &mut self.current_ngram_and_stats {
             if *ngram == entry.ngram {
                 stats.add_year(entry);
                 return;
@@ -89,24 +62,13 @@ impl FileStatsBuilder {
 
         // Otherwise, flush the current n-gram statistics and make the current
         // entry the new current n-gram
-        self.switch_ngram(Some(entry.ngram.clone()), Some(NgramStats::new(entry)));
+        self.switch_ngram(Some((entry.ngram.clone(), NgramStats::new(entry))));
     }
 
     /// Export final statistics at end of dataset processing
     pub fn finish_file(mut self) -> FileStats {
-        self.switch_ngram(None, None);
+        self.switch_ngram(None);
         self.file_stats
-    }
-
-    /// Get the current stats, if any, along with the associated n-gram
-    fn current_stats_and_ngram(&mut self) -> Option<(&mut NgramStats, &Ngram)> {
-        self.current_stats.as_mut().map(|stats| {
-            let ngram = self
-                .current_ngram
-                .as_ref()
-                .expect("If there are current stats, there should be an associated n-gram");
-            (stats, ngram)
-        })
     }
 
     /// Integrate the current n-gram into the file statistics and switch to a
@@ -115,25 +77,25 @@ impl FileStatsBuilder {
     /// This should be done when it is established that no other entry for this
     /// n-gram will come, either because we just moved to a different n-gram
     /// within the data file or because we reached the end of the data file.
-    fn switch_ngram(&mut self, new_ngram: Option<Ngram>, new_stats: Option<NgramStats>) {
-        // If there are stats, there must be an associated n-gram
-        assert!(
-            !(new_stats.is_some() && new_ngram.is_none()),
-            "attempted to add stats without an associated n-gram"
-        );
-
-        // Update current n-gram and flush former n-gram stats, if any
-        let former_ngram = std::mem::replace(&mut self.current_ngram, new_ngram);
-        if let Some(former_stats) = std::mem::replace(&mut self.current_stats, new_stats) {
-            // If there are stats, there must be an associated ngram
-            let former_ngram =
-                former_ngram.expect("current_stats should be associated with a current_ngram");
-
+    fn switch_ngram(&mut self, new_ngram_and_stats: Option<(Ngram, NgramStats)>) {
+        // Update current n-gram and get former n-gram stats, if any
+        if let Some((mut former_ngram, former_stats)) =
+            std::mem::replace(&mut self.current_ngram_and_stats, new_ngram_and_stats)
+        {
             // Check if there are sufficient statistics to accept this n-gram
             if former_stats.match_count.get() >= self.config.min_matches
                 && former_stats.min_volume_count.get() >= self.config.min_books
             {
-                // If so, inject it into the global file statistics
+                // If so, start by removing grammar tags...
+                former_ngram = match file::remove_grammar_tags(former_ngram) {
+                    Ok(ngram) => ngram,
+                    Err(bad_ngram) => {
+                        log::trace!("Rejected n-gram {bad_ngram:?} because it's not a word");
+                        return;
+                    }
+                };
+
+                // ...then inject it into the global file statistics
                 log::trace!("Accepted n-gram {former_ngram:?} with {former_stats:?} into current file statistics");
                 match self.file_stats.entry(UniCase::new(former_ngram.clone())) {
                     hash_map::Entry::Occupied(o) => {
@@ -187,17 +149,15 @@ impl CaseStats {
             self.total_stats >= self.top_stats,
             "total_stats should integrate the top casing's stats and then some"
         );
-        assert_ne!(
-            ngram, self.top_casing,
-            "this n-gram was already added to this case class!"
-        );
 
         // Add n-gram statistics to the case-equivalent statistics
         self.total_stats.merge_cases(stats);
 
         // If this n-gram has better stats than the previous top ngram, it
         // becomes the new top n-gram.
-        if stats > self.top_stats {
+        if ngram == self.top_casing {
+            self.top_stats.merge_cases(stats);
+        } else if stats > self.top_stats {
             self.top_casing = ngram;
             self.top_stats = stats;
         }
