@@ -1,7 +1,7 @@
 //! Processing of an individual data file
 
 use crate::{
-    config::Config, progress::ProgressReport, stats::{FileStats, FileStatsBuilder}, Ngram, Result, Year
+    config::Config, progress::ProgressReport, stats::{FileStats, FileStatsBuilder}, Ngram, Result, Year, YearMatchCount, YearVolumeCount
 };
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipDecoder;
@@ -12,7 +12,6 @@ use serde::Deserialize;
 use std::collections::hash_map;
 use std::{
     io::{self, ErrorKind},
-    num::NonZeroUsize,
     sync::Arc,
 };
 use tokio::task::JoinSet;
@@ -101,19 +100,27 @@ pub async fn download_and_process(
 }
 
 /// Entry from the dataset
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq)]
 pub struct Entry {
     /// (Case-sensitive) ngram whose frequency is being studied
     pub ngram: Ngram,
 
-    /// Year in which this frequency was recorded
+    /// Yearly data from this ngram
+    #[serde(flatten)]
+    pub data: YearData,
+}
+
+/// Yearly data subset of a dataset entry
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub struct YearData {
+    /// Year on which the data was recorded
     pub year: Year,
 
-    /// Number of matches
-    pub match_count: NonZeroUsize,
+    /// Number of recorded occurences
+    pub match_count: YearMatchCount,
 
-    /// Number of books in which matches were found
-    pub volume_count: NonZeroUsize,
+    /// Number of books across which occurences were recorded
+    pub volume_count: YearVolumeCount,
 }
 
 /// Build the early entry filter
@@ -141,7 +148,7 @@ pub fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bool {
         }
 
         // Determine if an entry should be rejected
-        let rejection = if entry.year < config.min_year {
+        let rejection = if entry.data.year < config.min_year {
             Some(RejectCause::Old)
         } else if config.strip_capitalized
             && entry

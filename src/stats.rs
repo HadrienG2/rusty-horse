@@ -1,15 +1,15 @@
 //! Ngram usage statistics
 
 use crate::{
-    add_nonzero_usize,
+    add_nz_u64,
     config::Config,
-    file::{self, Entry},
+    file::{self, Entry, YearData},
     Ngram, Year,
 };
 use std::{
     cmp::Ordering,
     collections::{hash_map, HashMap},
-    num::NonZeroUsize,
+    num::NonZeroU64,
     sync::Arc,
 };
 use unicase::UniCase;
@@ -55,14 +55,14 @@ impl FileStatsBuilder {
         // current ngram's statistics
         if let Some((ngram, stats)) = &mut self.current_ngram_and_stats {
             if *ngram == entry.ngram {
-                stats.add_year(entry);
+                stats.add_year(entry.data);
                 return;
             }
         }
 
         // Otherwise, flush the current ngram statistics and make the current
         // entry the new current ngram
-        self.switch_ngram(Some((entry.ngram.clone(), NgramStats::new(entry))));
+        self.switch_ngram(Some((entry.ngram, NgramStats::from(entry.data))));
     }
 
     /// Export final statistics at end of dataset processing
@@ -114,7 +114,7 @@ impl FileStatsBuilder {
 }
 
 /// Cumulative knowledge about an ngram case equivalence class
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CaseStats {
     /// Accumulated stats across the entire case equivalence class
     total_stats: NgramStats,
@@ -148,12 +148,12 @@ impl CaseStats {
         );
 
         // Add ngram statistics to the case-equivalent statistics
-        self.total_stats.merge_cases(stats);
+        self.total_stats.merge_equivalent(stats);
 
         // If this ngram has better stats than the previous top ngram, it
         // becomes the new top ngram.
         if ngram == self.top_casing {
-            self.top_stats.merge_cases(stats);
+            self.top_stats.merge_equivalent(stats);
         } else if stats > self.top_stats {
             self.top_casing = ngram;
             self.top_stats = stats;
@@ -169,9 +169,9 @@ impl CaseStats {
             self.total_stats >= self.top_stats,
             "total_stats should integrate the top casing's stats and then some"
         );
-        self.total_stats.merge_cases(rhs.total_stats);
+        self.total_stats.merge_equivalent(rhs.total_stats);
         if rhs.top_casing == self.top_casing {
-            self.top_stats.merge_cases(rhs.top_stats);
+            self.top_stats.merge_equivalent(rhs.top_stats);
         } else if rhs.top_stats > self.top_stats {
             self.top_casing = rhs.top_casing;
             self.top_stats = rhs.top_stats;
@@ -184,8 +184,8 @@ impl CaseStats {
     }
 }
 
-/// Cumulative knowledge about an ngram
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+/// Cumulative knowledge about a single ngram or case equivalence class
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct NgramStats {
     /// Year of first occurence
     first_year: Year,
@@ -194,57 +194,71 @@ pub struct NgramStats {
     last_year: Year,
 
     /// Total number of matches over period of interest
-    match_count: NonZeroUsize,
+    match_count: NonZeroU64,
 
     /// Lower bound on the number of books with matches over period of interest
     ///
     /// Is an exact count as long as the stats only cover a single ngram
     /// casing, but becomes a lower bound when equivalent casing are merged.
-    min_volume_count: NonZeroUsize,
+    min_volume_count: NonZeroU64,
 }
 //
 impl NgramStats {
-    /// Set up statistics from a single dataset entry
-    pub fn new(entry: Entry) -> Self {
-        Self::validate_entry(&entry);
-        Self {
-            first_year: entry.year,
-            last_year: entry.year,
-            match_count: entry.match_count,
-            min_volume_count: entry.volume_count,
-        }
+    /// Year of first occurence
+    #[allow(unused)]
+    pub fn first_year(&self) -> Year {
+        self.first_year
+    }
+
+    /// Year of last occurence
+    #[allow(unused)]
+    pub fn last_year(&self) -> Year {
+        self.last_year
+    }
+
+    /// Total number of matches over the period of interest
+    pub fn match_count(&self) -> u64 {
+        self.match_count.get()
+    }
+
+    /// Lower bound on the number of books with matches
+    ///
+    /// Is an exact count as long as the stats only cover a single ngram casing,
+    /// but becomes a lower bound when equivalent ngrams are merged.
+    pub fn min_volume_count(&self) -> u64 {
+        self.min_volume_count.get()
     }
 
     /// Update statistics with a new yearly entry
     ///
-    /// Yearly entries should be merged in the order that they appear in data
+    /// Yearly entries should be added in the order that they appear in data
     /// files, i.e. from least recent to most recent.
-    pub fn add_year(&mut self, entry: Entry) {
+    pub fn add_year(&mut self, data: YearData) {
         debug_assert!(
             self.first_year <= self.last_year,
             "Violated first < last year type invariant"
         );
-        Self::validate_entry(&entry);
+        Self::validate_entry(&data);
         assert!(
-            entry.year > self.first_year.max(self.last_year),
+            data.year > self.first_year.max(self.last_year),
             "Dataset entries should be sorted by year"
         );
-        self.last_year = entry.year;
-        self.match_count = add_nonzero_usize(self.match_count, entry.match_count);
+        self.last_year = data.year;
+        self.match_count = add_nz_u64(self.match_count, data.match_count);
         // We can add volume counts here because we're still case-sensitive at
         // this point in time and books only have one publication date so
         // different year entries won't refer to the same book.
-        self.min_volume_count = add_nonzero_usize(self.min_volume_count, entry.volume_count);
+        self.min_volume_count = add_nz_u64(self.min_volume_count, data.volume_count.into());
     }
 
-    /// Merge statistics from two case-equivalent ngrams
+    /// Merge statistics from another case- or tag-equivalent ngrams
     ///
     /// You should only do this after you're done accumulating data for the
     /// current ngram
-    pub fn merge_cases(&mut self, rhs: NgramStats) {
+    pub fn merge_equivalent(&mut self, rhs: NgramStats) {
         self.first_year = self.first_year.min(rhs.first_year);
         self.last_year = self.last_year.max(rhs.last_year);
-        self.match_count = add_nonzero_usize(self.match_count, rhs.match_count);
+        self.match_count = add_nz_u64(self.match_count, rhs.match_count);
         // We cannot add volume counts here because different casings of the
         // same word may appear within the same book, so we must take a
         // pessimistic lower bound.
@@ -252,11 +266,23 @@ impl NgramStats {
     }
 
     /// Make sure that an entry is reasonable
-    fn validate_entry(entry: &Entry) {
+    fn validate_entry(data: &YearData) {
         assert!(
-            entry.match_count >= entry.volume_count,
+            data.match_count >= NonZeroU64::from(data.volume_count),
             "Entry cannot appear in more books than it has matches"
         );
+    }
+}
+//
+impl From<YearData> for NgramStats {
+    fn from(data: YearData) -> Self {
+        Self::validate_entry(&data);
+        Self {
+            first_year: data.year,
+            last_year: data.year,
+            match_count: data.match_count,
+            min_volume_count: data.volume_count.into(),
+        }
     }
 }
 //

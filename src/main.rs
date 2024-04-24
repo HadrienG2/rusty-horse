@@ -4,6 +4,7 @@
 
 mod cache;
 mod config;
+mod dataset;
 mod file;
 mod languages;
 mod progress;
@@ -13,7 +14,7 @@ mod top;
 use crate::{config::Config, progress::ProgressReport};
 use clap::Parser;
 use log::LevelFilter;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroU32, NonZeroUsize};
 
 /// TODO: User-visible program description
 ///
@@ -57,7 +58,7 @@ struct Args {
     /// characters. Therefore we ignore words which occur too rarely in the
     /// selected dataset section.
     #[arg(short = 'm', long, default_value_t = 6000)]
-    min_matches: usize,
+    min_matches: u64,
 
     /// Minimum accepted number of matching books
     ///
@@ -65,7 +66,7 @@ struct Args {
     /// author, or the product of an OCR error. Therefore, we only consider
     /// words which are seen in a sufficiently large number of books.
     #[arg(short = 'b', long, default_value_t = 10)]
-    min_books: usize,
+    min_books: u64,
 
     /// Max number of output ngrams
     ///
@@ -150,11 +151,29 @@ pub const DATASET_PUBLICATION_YEAR: Year = 2012;
 pub type Ngram = Box<str>;
 
 /// Year of Gregorian Calendar
-pub type Year = isize;
+pub type Year = i16;
 
-/// Addition operator for NonZeroUsize
-pub fn add_nonzero_usize(x: NonZeroUsize, y: NonZeroUsize) -> NonZeroUsize {
-    NonZeroUsize::new(x.get() + y.get()).expect("overflow while adding NonZeroUsizes")
+/// Number of matches for an ngram over a single year
+///
+/// According to
+/// https://github.com/orgtre/google-books-ngram-frequency?tab=readme-ov-file#the-underlying-corpus,
+/// English can have >283 billion matches over 10 years, or an average of
+/// 28B/year. Knowing that some words (like "the" in English) are a lot more
+/// common than others, using u32s for yearly match counts would feel dangerous.
+pub type YearMatchCount = NonZeroU64;
+
+/// Number of books with matches for an ngram over a single year
+///
+/// According to
+/// https://worldpopulationreview.com/country-rankings/books-published-per-year-by-country
+/// there were ~4 million books published over a recent year, and according to
+/// the total_counts file from the dataset Google only mined 220k of those
+/// books. So u32 counts seem pretty fitting
+pub type YearVolumeCount = NonZeroU32;
+
+/// Addition operator for NonZeroU64
+pub fn add_nz_u64(x: NonZeroU64, y: NonZeroU64) -> NonZeroU64 {
+    NonZeroU64::new(x.get() + y.get()).expect("overflow while adding NonZeroU64s")
 }
 
 /// Set up logging

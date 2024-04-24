@@ -18,10 +18,10 @@ pub struct Config {
     pub min_year: Year,
 
     /// Minimum accepted number of matches across of books
-    pub min_matches: usize,
+    pub min_matches: u64,
 
     /// Minimum accepted number of matching books
-    pub min_books: usize,
+    pub min_books: u64,
 
     /// Maximal number of output ngrams
     pub max_outputs: Option<NonZeroUsize>,
