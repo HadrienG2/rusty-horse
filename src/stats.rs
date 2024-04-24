@@ -79,24 +79,20 @@ impl FileStatsBuilder {
     /// within the data file or because we reached the end of the data file.
     fn switch_ngram(&mut self, new_ngram_and_stats: Option<(Ngram, NgramStats)>) {
         // Update current ngram and get former ngram stats, if any
-        if let Some((mut former_ngram, former_stats)) =
+        if let Some((former_ngram, former_stats)) =
             std::mem::replace(&mut self.current_ngram_and_stats, new_ngram_and_stats)
         {
             // Check if there are sufficient statistics to accept this ngram
             if former_stats.match_count.get() >= self.config.min_matches
                 && former_stats.min_volume_count.get() >= self.config.min_books
             {
-                // If so, start by removing grammar tags so that it's merged
-                // with untagged versions of itself during case unification...
-                former_ngram = match file::remove_grammar_tags(former_ngram) {
-                    Ok(ngram) => ngram,
-                    Err(bad_ngram) => {
-                        log::trace!("Rejected ngram {bad_ngram:?} because it's not a word");
-                        return;
-                    }
+                // If so, normalize the ngram with non-word rejection...
+                let Some(former_ngram) = file::normalizing_filter_map(former_ngram) else {
+                    // Ngram does not look like a word, rejecting it...
+                    return;
                 };
 
-                // ...then inject it into the case-insensitive file statistics
+                // ...then record it into the case-insensitive file statistics
                 log::trace!("Accepted ngram {former_ngram:?} with {former_stats:?} into current file statistics");
                 match self.file_stats.entry(UniCase::new(former_ngram.clone())) {
                     hash_map::Entry::Occupied(o) => {
