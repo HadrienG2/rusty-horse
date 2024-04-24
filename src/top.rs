@@ -1,4 +1,4 @@
-//! Select the top n-grams from the final aggregated data set
+//! Select the top ngrams from the final aggregated data set
 
 use crate::{config::Config, progress::ProgressReport, stats::FileStats, Ngram};
 use rayon::prelude::*;
@@ -7,7 +7,7 @@ use std::{
     collections::{BinaryHeap, VecDeque},
 };
 
-/// Pick the top n-grams from the aggregated dataset
+/// Pick the top ngrams from the aggregated dataset
 pub fn pick_top_ngrams(
     config: &Config,
     full_stats: FileStats,
@@ -19,13 +19,13 @@ pub fn pick_top_ngrams(
             .into_par_iter()
             .map(|(_, case_stats)| {
                 let (ngram, stats) = case_stats.collect();
-                log::debug!("Keeping n-gram {ngram} with statistics {:#?}", stats);
+                log::debug!("Keeping ngram {ngram} with statistics {:#?}", stats);
                 ngram
             })
             .collect();
     }
 
-    // Sort n-grams by popularity, picking the most frequent ones if requested
+    // Sort ngrams by popularity, picking the most frequent ones if requested
     report.start_sort(full_stats.len());
     let mut top_entries = if let Some(max_outputs) = config.max_outputs {
         BinaryHeap::with_capacity(max_outputs.get())
@@ -47,7 +47,7 @@ pub fn pick_top_ngrams(
     if config.sort_by_popularity {
         let mut ngrams_by_decreasing_stats = VecDeque::with_capacity(top_entries.len());
         while let Some((stats, ngram)) = top_entries.pop() {
-            log::debug!("Keeping n-gram {ngram} with statistics {:#?}", stats.0);
+            log::debug!("Keeping ngram {ngram} with statistics {:#?}", stats.0);
             ngrams_by_decreasing_stats.push_front(ngram);
         }
         ngrams_by_decreasing_stats.into()
@@ -55,7 +55,7 @@ pub fn pick_top_ngrams(
         top_entries
             .into_iter()
             .map(|(stats, ngram)| {
-                log::debug!("Keeping n-gram {ngram} with statistics {:#?}", stats.0);
+                log::debug!("Keeping ngram {ngram} with statistics {:#?}", stats.0);
                 ngram
             })
             .collect()

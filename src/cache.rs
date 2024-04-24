@@ -4,8 +4,8 @@
 //! format. Instead, our disk cache will use an Apache Parquet based format
 //! tailored to our needs :
 //!
-//! - N-grams are grouped by case equivalence classes
-//! - Yearly data does not include unnecessary redundant n-gram copies
+//! - Ngrams are grouped by case equivalence classes
+//! - Yearly data does not include unnecessary redundant ngram copies
 //! - Everything is sorted by decreasing year and popularity to enable early
 //!   exit when some user cutoff is reached.
 
@@ -18,10 +18,10 @@ use unicase::UniCase;
 
 /// Mechanism for collecting the dataset into an ordered Arrow table
 pub struct CacheBuilder {
-    /// Previously recorded N-gram case equivalence classes
+    /// Previously recorded ngram case equivalence classes
     equivalence_classes: HashMap<UniCase<Ngram>, CaseEquivalenceClassBuilder>,
 
-    /// Last N-gram seen within the file, if any
+    /// Last ngram seen within the file, if any
     current_ngram: Option<Ngram>,
 
     /// Accumulated stats from accepted entries for current_ngram, if any

@@ -1,4 +1,4 @@
-//! This program is based on the Google Books Ngrams dataset, whose general
+//! This program is based on the Google Books Ngram dataset, whose general
 //! documentation you can find at
 //! <http://storage.googleapis.com/books/ngrams/books/datasetsv3.html>.
 
@@ -21,7 +21,8 @@ use std::num::NonZeroUsize;
 /// ngram (before case equivalence), over the time period of interest.
 #[derive(Parser, Debug)]
 struct Args {
-    /// Short name of the Google Ngrams language to be used, e.g. "eng-fiction"
+    /// Short name of the Google Books Ngram language to be used, e.g.
+    /// "eng-fiction"
     ///
     /// Will interactively prompt for a supported language if not specified.
     #[arg(short, long, default_value = None)]
@@ -31,7 +32,7 @@ struct Args {
     //
     /// Strip capitalized words, if it makes sense for the target language
     ///
-    /// In most languages from the Google Books dataset, n-grams that start with
+    /// In most languages from the Google Books dataset, ngrams that start with
     /// a capital letter tend to be an odd passphrase building block. But this
     /// is not always true, one exception being German. By default, we ignore
     /// capitalized words for every language where it makes sense to do so.
@@ -46,7 +47,7 @@ struct Args {
     /// year, at the cost of reducing the size of the dataset.
     ///
     /// By default, we include books starting 50 years before the date where the
-    /// n-grams dataset was published.
+    /// Ngrams dataset was published.
     #[arg(short = 'y', long, default_value = None)]
     min_year: Option<Year>,
 
@@ -66,17 +67,17 @@ struct Args {
     #[arg(short = 'b', long, default_value_t = 10)]
     min_books: usize,
 
-    /// Max number of output n-grams
+    /// Max number of output ngrams
     ///
-    /// While it is possible to compute the full list of valid n-grams and trim
+    /// While it is possible to compute the full list of valid ngrams and trim
     /// it to the desired length later on, knowing the desired number of matches
     /// right from the start allows this program to discard less frequent
-    /// n-grams before the full list of n-grams is available. As a result, the
+    /// ngrams before the full list of ngrams is available. As a result, the
     /// processing will consume less memory and run a little faster.
     #[arg(short = 'o', long)]
     max_outputs: Option<NonZeroUsize>,
 
-    /// Sort output n-grams in order of decreasing match count
+    /// Sort output ngrams in order of decreasing match count
     ///
     /// When adjusting rejection settings, it is usually best to order outputs
     /// by decreasing occurence count. But that requires some post-processing,
@@ -131,7 +132,7 @@ async fn main() -> Result<()> {
         file::download_and_process_all(config.clone(), client, dataset_urls, report.clone())
             .await?;
 
-    // Pick the most frequent n-grams across all data files
+    // Pick the most frequent ngrams across all data files
     let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, full_stats, &report);
     for ngram in ngrams_by_decreasing_stats {
         println!("{ngram}");
@@ -145,7 +146,7 @@ pub use anyhow::Result;
 /// Year where the dataset that we use was published
 pub const DATASET_PUBLICATION_YEAR: Year = 2012;
 
-/// Case-sensitive n-gram
+/// Case-sensitive ngram
 pub type Ngram = Box<str>;
 
 /// Year of Gregorian Calendar

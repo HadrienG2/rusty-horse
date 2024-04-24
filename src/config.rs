@@ -11,7 +11,7 @@ use std::{num::NonZeroUsize, sync::Arc};
 pub struct Config {
     // TODO: "Bad word" exclusion mechanism
     //
-    /// Whether capitalized n-grams should be ignored
+    /// Whether capitalized ngrams should be ignored
     pub strip_capitalized: bool,
 
     /// Minimum accepted book publication year
@@ -23,7 +23,7 @@ pub struct Config {
     /// Minimum accepted number of matching books
     pub min_books: usize,
 
-    /// Maximal number of output n-grams
+    /// Maximal number of output ngrams
     pub max_outputs: Option<NonZeroUsize>,
 
     /// Sort output by decreasing popularity

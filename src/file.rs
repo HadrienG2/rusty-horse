@@ -103,7 +103,7 @@ pub async fn download_and_process(
 /// Entry from the dataset
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Entry {
-    /// (Case-sensitive) n-gram whose frequency is being studied
+    /// (Case-sensitive) ngram whose frequency is being studied
     pub ngram: Ngram,
 
     /// Year in which this frequency was recorded
@@ -116,7 +116,7 @@ pub struct Entry {
     pub volume_count: NonZeroUsize,
 }
 
-/// Remove well-formed grammar tags from an N-gram, reject any other
+/// Remove well-formed grammar tags from an ngram, reject any other
 /// underscore-based pattern which suggests we're dealing with a non-word entity
 pub fn remove_grammar_tags(mut ngram: Ngram) -> Result<Ngram, Ngram> {
     let mut remainder = &ngram[..];
@@ -146,7 +146,7 @@ pub fn remove_grammar_tags(mut ngram: Ngram) -> Result<Ngram, Ngram> {
         break 'strip_tags;
     }
     if !new_ngram.is_empty() {
-        log::trace!("Normalized tagged N-gram {ngram:?} into untagged form {new_ngram:?}");
+        log::trace!("Normalized tagged ngram {ngram:?} into untagged form {new_ngram:?}");
         ngram = new_ngram.into();
     }
     Ok(ngram)
@@ -154,9 +154,12 @@ pub fn remove_grammar_tags(mut ngram: Ngram) -> Result<Ngram, Ngram> {
 
 /// Build the early entry filter
 ///
-/// Data file entries go through this filter before undergoing any other
-/// processing, thus avoiding unnecessary processing for entries we know we're
-/// going to throw away.
+/// Data file entries go through this filter first before undergoing any other
+/// processing. This avoids unnecessary processing in scenarios where just by
+/// looking at an entry we can quickly infer that it should be thrown away.
+///
+/// One should refrain from performing expensive on an ngram at this stage
+/// because
 pub fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bool {
     move |entry| {
         /// Reasons why a data file entry could be discarded
@@ -180,7 +183,7 @@ pub fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bool {
                 .ngram
                 .chars()
                 .next()
-                .expect("n-grams shouldn't be empty")
+                .expect("ngrams shouldn't be empty")
                 .is_uppercase()
         {
             Some(RejectCause::Capitalized)
@@ -194,7 +197,7 @@ pub fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bool {
         if let Some(rejection) = rejection {
             let cause = match rejection {
                 RejectCause::Old => "it's too old",
-                RejectCause::Capitalized => "capitalized N-grams are rejected",
+                RejectCause::Capitalized => "capitalized ngrams are rejected",
                 RejectCause::NonWord => "it's not a word",
             };
             log::trace!("Rejected {entry:?} because {cause}");

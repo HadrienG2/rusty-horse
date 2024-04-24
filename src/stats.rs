@@ -1,4 +1,4 @@
-//! N-gram usage statistics
+//! Ngram usage statistics
 
 use crate::{
     add_nonzero_usize,
@@ -25,12 +25,12 @@ pub struct FileStatsBuilder {
     /// Data collection configuration
     config: Arc<Config>,
 
-    /// Last accepted N-gram, if any, and accumulated stats associated with it
+    /// Last accepted ngram, if any, and accumulated stats associated with it
     current_ngram_and_stats: Option<(Ngram, NgramStats)>,
 
-    /// Accumulated stats across n-gram case equivalence classes
+    /// Accumulated stats across ngram case equivalence classes
     ///
-    /// For each n-gram case equivalence class, provides...
+    /// For each ngram case equivalence class, provides...
     /// - Total stats across the case equivalence class
     /// - Current case with top stats, and stats for this case
     file_stats: FileStats,
@@ -51,8 +51,8 @@ impl FileStatsBuilder {
     /// Dataset entries should be added in the order where they come in data
     /// files: sorted by ngram, then by increasing year.
     pub fn add_entry(&mut self, entry: Entry) {
-        // If the entry is associated with the current n-gram, merge it into the
-        // current n-gram's statistics
+        // If the entry is associated with the current ngram, merge it into the
+        // current ngram's statistics
         if let Some((ngram, stats)) = &mut self.current_ngram_and_stats {
             if *ngram == entry.ngram {
                 stats.add_year(entry);
@@ -60,8 +60,8 @@ impl FileStatsBuilder {
             }
         }
 
-        // Otherwise, flush the current n-gram statistics and make the current
-        // entry the new current n-gram
+        // Otherwise, flush the current ngram statistics and make the current
+        // entry the new current ngram
         self.switch_ngram(Some((entry.ngram.clone(), NgramStats::new(entry))));
     }
 
@@ -71,18 +71,18 @@ impl FileStatsBuilder {
         self.file_stats
     }
 
-    /// Integrate the current n-gram into the file statistics and switch to a
+    /// Integrate the current ngram into the file statistics and switch to a
     /// different one (or none at all)
     ///
     /// This should be done when it is established that no other entry for this
-    /// n-gram will come, either because we just moved to a different n-gram
+    /// ngram will come, either because we just moved to a different ngram
     /// within the data file or because we reached the end of the data file.
     fn switch_ngram(&mut self, new_ngram_and_stats: Option<(Ngram, NgramStats)>) {
-        // Update current n-gram and get former n-gram stats, if any
+        // Update current ngram and get former ngram stats, if any
         if let Some((mut former_ngram, former_stats)) =
             std::mem::replace(&mut self.current_ngram_and_stats, new_ngram_and_stats)
         {
-            // Check if there are sufficient statistics to accept this n-gram
+            // Check if there are sufficient statistics to accept this ngram
             if former_stats.match_count.get() >= self.config.min_matches
                 && former_stats.min_volume_count.get() >= self.config.min_books
             {
@@ -91,13 +91,13 @@ impl FileStatsBuilder {
                 former_ngram = match file::remove_grammar_tags(former_ngram) {
                     Ok(ngram) => ngram,
                     Err(bad_ngram) => {
-                        log::trace!("Rejected n-gram {bad_ngram:?} because it's not a word");
+                        log::trace!("Rejected ngram {bad_ngram:?} because it's not a word");
                         return;
                     }
                 };
 
                 // ...then inject it into the case-insensitive file statistics
-                log::trace!("Accepted n-gram {former_ngram:?} with {former_stats:?} into current file statistics");
+                log::trace!("Accepted ngram {former_ngram:?} with {former_stats:?} into current file statistics");
                 match self.file_stats.entry(UniCase::new(former_ngram.clone())) {
                     hash_map::Entry::Occupied(o) => {
                         let o = o.into_mut();
@@ -110,14 +110,14 @@ impl FileStatsBuilder {
                     }
                 }
             } else {
-                // If the n-gram is rejected, log it for posterity
-                log::trace!("Rejected n-gram {former_ngram:?} with {former_stats:?} from file statistics due to insufficient occurences");
+                // If the ngram is rejected, log it for posterity
+                log::trace!("Rejected ngram {former_ngram:?} with {former_stats:?} from file statistics due to insufficient occurences");
             }
         }
     }
 }
 
-/// Cumulative knowledge about an n-gram case equivalence class
+/// Cumulative knowledge about an ngram case equivalence class
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CaseStats {
     /// Accumulated stats across the entire case equivalence class
@@ -140,9 +140,9 @@ impl CaseStats {
         }
     }
 
-    /// Add a new case-equivalent n-gram to these stats
+    /// Add a new case-equivalent ngram to these stats
     ///
-    /// It is assumed that you have checked that this n-gram is indeed
+    /// It is assumed that you have checked that this ngram is indeed
     /// case-equivalent to the one that the stats were created with.
     pub fn add_casing(&mut self, ngram: Ngram, stats: NgramStats) {
         // Sanity checks
@@ -151,11 +151,11 @@ impl CaseStats {
             "total_stats should integrate the top casing's stats and then some"
         );
 
-        // Add n-gram statistics to the case-equivalent statistics
+        // Add ngram statistics to the case-equivalent statistics
         self.total_stats.merge_cases(stats);
 
-        // If this n-gram has better stats than the previous top ngram, it
-        // becomes the new top n-gram.
+        // If this ngram has better stats than the previous top ngram, it
+        // becomes the new top ngram.
         if ngram == self.top_casing {
             self.top_stats.merge_cases(stats);
         } else if stats > self.top_stats {
@@ -188,7 +188,7 @@ impl CaseStats {
     }
 }
 
-/// Cumulative knowledge about an n-gram
+/// Cumulative knowledge about an ngram
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct NgramStats {
     /// Year of first occurence
@@ -202,7 +202,7 @@ pub struct NgramStats {
 
     /// Lower bound on the number of books with matches over period of interest
     ///
-    /// Is an exact count as long as the stats only cover a single n-gram
+    /// Is an exact count as long as the stats only cover a single ngram
     /// casing, but becomes a lower bound when equivalent casing are merged.
     min_volume_count: NonZeroUsize,
 }

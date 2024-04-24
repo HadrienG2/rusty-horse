@@ -69,7 +69,7 @@ impl LanguageInfo {
         self.word_prefixes.iter().map(move |word_prefix| {
             format!(
                 // NOTE: For now, we only use 1-grams to keep the dataset small
-                //       and avoid the extra complexity that comes with n-grams
+                //       and avoid the extra complexity that comes with ngrams
                 "http://storage.googleapis.com/books/ngrams/books/googlebooks-{}-all-1gram-20120701-{word_prefix}.gz",
                 self.short_name,
             ).into()

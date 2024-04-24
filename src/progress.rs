@@ -14,7 +14,7 @@ pub struct ProgressReport {
     /// Progress bar indicating the status of running downloads
     bytes: ProgressBar,
 
-    /// Progress bar indicating the status of sorting n-grams
+    /// Progress bar indicating the status of sorting ngrams
     sort: ProgressBar,
 }
 //
@@ -40,9 +40,9 @@ impl ProgressReport {
                 .unwrap(),
             );
 
-        // Prepare to track n-gram sorting
+        // Prepare to track ngram sorting
         let sort = ProgressBar::new(0)
-            .with_prefix("Picking the top n-grams")
+            .with_prefix("Picking the top ngrams")
             .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         Arc::new(Self {
             multi,
@@ -101,12 +101,12 @@ impl ProgressReport {
         }
     }
 
-    /// Start tracking the final n-grams sort
+    /// Start tracking the final ngrams sort
     pub fn start_sort(&self, num_ngrams: usize) {
         // Make sure that we are ready to sort
         assert!(
             self.start.is_finished() && self.bytes.is_finished(),
-            "should not start sorting n-grams before they have all been collected"
+            "should not start sorting ngrams before they have all been collected"
         );
 
         // Make sure that we have not sorted already
@@ -121,7 +121,7 @@ impl ProgressReport {
         self.multi.add(self.sort.clone());
     }
 
-    /// Track that some n-grams have been sorted
+    /// Track that some ngrams have been sorted
     pub fn inc_sorted(&self, num_ngrams: usize) {
         // Make sure we don't overflow the sorting counter
         let curr_len = self.sort.length().unwrap_or(0);
