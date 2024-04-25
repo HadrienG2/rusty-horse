@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.81"
+arrow = { version = "51.0.0", default-features = false }
 async-compression = { version = "0.4.6", features = ["tokio", "gzip"] }
 clap = { version = "4.5.3", features = ["derive", "wrap_help"] }
 csv-async = { version = "1.3.0", features = ["tokio"] }
@@ -13,11 +14,13 @@ directories = "5.0.1"
 futures = "0.3.30"
 indicatif = "0.17.8"
 log = "0.4.21"
+parquet = { version = "51.0.0", features = ["tokio", "arrow", "async", "zstd", "lz4"], default-features = false }
 rayon = "1.10.0"
 reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls", "stream"] }
 serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.116"
 syslog = "6.1.0"
-tokio = { version = "1.36.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.36.0", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.10", features = ["io"] }
 unicase = "2.7.0"
 

@@ -162,7 +162,7 @@ impl DatasetFiles {
     }
 
     /// Convert the dataset to its final form
-    pub fn finish(self) -> Dataset {
+    pub fn finish(self) -> Arc<Dataset> {
         // Order case equivalence classes by decreasing stats...
         let mut case_classes = (self.data.into_par_iter())
             .map(|(_key, class)| {
@@ -191,11 +191,15 @@ impl DatasetFiles {
                 builder.build()
             })
             .collect::<_>();
-        Dataset(dataset_blocks)
+
+        // Parallelize and the liberation of the original data and offload it to
+        // a background thread, as this is a surprisingly expensive operation!
+        std::thread::spawn(move || case_classes.into_par_iter().for_each(std::mem::drop));
+        Arc::new(Dataset(dataset_blocks))
     }
 }
 //
-impl From<DatasetFiles> for Dataset {
+impl From<DatasetFiles> for Arc<Dataset> {
     fn from(value: DatasetFiles) -> Self {
         value.finish()
     }

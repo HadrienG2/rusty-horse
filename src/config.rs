@@ -20,16 +20,16 @@ pub struct Config {
     pub min_matches: NonZeroU64,
     pub min_books: NonZeroU64,
     pub memory_chunk: NonZeroUsize,
-    pub storage_chunk: NonZeroUsize,
+    pub mem_chunks_per_storage_chunk: NonZeroUsize,
     pub max_outputs: Option<NonZeroUsize>,
     pub sort_by_popularity: bool,
 }
 //
 impl Config {
     /// Determine process configuration from initialization products
-    pub fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
+    pub(crate) fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
         let min_year = args.min_year();
-        let storage_chunk = args.storage_chunk();
+        let mem_chunks_per_storage_chunk = args.mem_chunks_per_storage_chunk();
         let Args {
             language: _,
             strip_capitalized,
@@ -47,7 +47,7 @@ impl Config {
             min_matches,
             min_books,
             memory_chunk,
-            storage_chunk,
+            mem_chunks_per_storage_chunk,
             max_outputs,
             sort_by_popularity,
         })

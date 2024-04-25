@@ -23,7 +23,7 @@ pub async fn download_and_collect(
     client: reqwest::Client,
     urls: impl IntoIterator<Item = Box<str>>,
     report: Arc<ProgressReport>,
-) -> Result<Dataset> {
+) -> Result<Arc<Dataset>> {
     // Start downloading and processing all the files
     let mut data_files = JoinSet::new();
     for url in urls {

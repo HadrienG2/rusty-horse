@@ -11,10 +11,12 @@ mod top;
 mod tsv;
 
 use crate::{config::Config, progress::ProgressReport};
+use anyhow::Context;
 use serde::Deserialize;
 use clap::Parser;
 use log::LevelFilter;
-use std::{io::Write, num::{NonZeroU64, NonZeroU32, NonZeroUsize}};
+use std::num::{NonZeroU64, NonZeroU32, NonZeroUsize};
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 /// TODO: User-visible program description
 ///
@@ -94,7 +96,7 @@ struct Args {
     /// in-memory chunk size.
     //
     // FIXME: Tune this to sensible defaults
-    #[arg(long, default_value = "10000")]
+    #[arg(long, default_value = "500")]
     storage_chunk: NonZeroUsize,
 
 
@@ -141,9 +143,9 @@ impl Args {
     }
 
     /// Storage chunk size
-    pub fn storage_chunk(&self) -> NonZeroUsize {
+    pub fn mem_chunks_per_storage_chunk(&self) -> NonZeroUsize {
         NonZeroUsize::new(
-            self.storage_chunk.get().next_multiple_of(self.memory_chunk.get()),
+            self.storage_chunk.get().div_ceil(self.memory_chunk.get()),
         )
         .expect("rounding the disk chunk size to the next multiple of the memory chunk size shouldn't break the NonZero property")
     }
@@ -164,19 +166,32 @@ async fn main() -> Result<()> {
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
 
-    // Collect the dataset
+    // Collect the dataset (TODO: Try to use the cache here)
     let config = Config::new(args, language);
     let client = reqwest::Client::new();
     let dataset =
         tsv::download_and_collect(config.clone(), client, dataset_urls, report.clone())
             .await?;
 
+    // Start caching the dataset on disk (TODO: Don't do this if it comes from
+    // the cache already)
+    let save_cache = tokio::spawn(dataset::cache::save(config.clone(), dataset.clone()));
+
     // Pick the most frequent ngrams across all data files
     let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset);
-    let mut stdout = std::io::stdout().lock();
-    for ngram in ngrams_by_decreasing_stats {
-        writeln!(stdout, "{ngram}")?;
+    {
+        let stdout = tokio::io::stdout();
+        let mut stdout = BufWriter::new(stdout);
+        for ngram in ngrams_by_decreasing_stats {
+            stdout.write_all(ngram.as_bytes()).await?;
+            stdout.write_all(b"\n").await?;
+        }
+        stdout.flush().await?;
     }
+
+    // ...then wait until we're done saving the cache to disk
+    eprintln!("Saving cache dataset to disk...");
+    save_cache.await.context("saving dataset to disk")??;
     Ok(())
 }
 
