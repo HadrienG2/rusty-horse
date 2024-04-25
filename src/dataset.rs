@@ -23,7 +23,7 @@ use std::{
 };
 use unicase::UniCase;
 
-/// Cumulative knowledge from all data files of interest
+/// Cumulative knowledge aggregated from all files of the Google Books dataset
 ///
 /// Case equivalence classes and ngrams are sorted by decreasing all-time usage
 /// frequency, and for each ngram, data columns are sorted by decreasing year.
@@ -169,14 +169,122 @@ impl<'dataset> NgramView<'dataset> {
     }
 }
 
-/// Cumulative knowledge from one or more data files, in which knowledge from
-/// other files can still be merged
+/// Accumulator for entries from a single file of the Google Books Ngram dataset
 ///
-/// Accumulated using [`DatasetBuilder`], turn into a [`Dataset`] once done
-/// accumulating.
-pub struct DatasetMerger(HashMap<UniCase<Ngram>, CaseEquivalentData>);
+/// Once you're done with an input file, call
+/// [`finish_file()`](Self::finish_file) to get a simplified [`DatasetFiles`]
+/// accumulator that can only merge data from different input files.
+#[derive(Debug)]
+pub struct DatasetBuilder {
+    /// Data collection configuration
+    config: Arc<Config>,
+
+    /// Last seen ngram, if any, and accumulated data about it
+    current_ngram_and_data: Option<(Ngram, NgramDataBuilder)>,
+
+    /// Data from previous ngrams, grouped by case equivalence classes
+    equivalence_classes: HashMap<UniCase<Ngram>, CaseEquivalentData>,
+}
 //
-impl DatasetMerger {
+impl DatasetBuilder {
+    /// Set up the accumulator
+    pub fn new(config: Arc<Config>) -> Self {
+        Self {
+            config,
+            current_ngram_and_data: None,
+            equivalence_classes: HashMap::new(),
+        }
+    }
+
+    /// Integrate a new dataset entry
+    ///
+    /// Dataset entries should be added in the order where they come in data
+    /// files: sorted by ngram, then by increasing year.
+    pub fn add_entry(&mut self, entry: Entry) {
+        // If the entry is associated with the current ngram, merge it into the
+        // current ngram's statistics
+        if let Some((ngram, data)) = &mut self.current_ngram_and_data {
+            if *ngram == entry.ngram {
+                data.add_year(entry.data);
+                return;
+            }
+        }
+
+        // Otherwise, flush the current ngram data and make the current entry
+        // the new current ngram
+        self.switch_ngram(Some((entry.ngram, NgramDataBuilder::from(entry.data))));
+    }
+
+    /// Export the file dataset
+    ///
+    /// Call this when you're done accumulating entries from a source data file.
+    pub fn finish_file(mut self) -> DatasetFiles {
+        self.switch_ngram(None);
+        DatasetFiles(self.equivalence_classes)
+    }
+
+    /// Integrate the current ngram into the dataset and switch to a different
+    /// ngram (or none at all)
+    ///
+    /// This should be done when it is established that no other entry for this
+    /// ngram will come, either because we just moved to a different ngram
+    /// within the source data file or because we reached the end of that file.
+    fn switch_ngram(&mut self, new_ngram_and_data: Option<(Ngram, NgramDataBuilder)>) {
+        // Update current ngram and get former ngram data, if any
+        if let Some((former_ngram, former_data)) =
+            std::mem::replace(&mut self.current_ngram_and_data, new_ngram_and_data)
+        {
+            // Check if there are sufficient statistics to accept this ngram
+            if former_data.stats.match_count() >= self.config.min_matches
+                && former_data.stats.min_volume_count() >= self.config.min_books
+            {
+                // If so, normalize the ngram with non-word rejection...
+                let Some(former_ngram) = file::normalizing_filter_map(former_ngram) else {
+                    // Ngram does not look like a word, rejecting it...
+                    return;
+                };
+
+                // ...then record it into the case-insensitive file statistics
+                log::trace!(
+                    "Accepted ngram {former_ngram:?} with {former_data:?} into the dataset"
+                );
+                let former_data = former_data.build();
+                match self
+                    .equivalence_classes
+                    .entry(UniCase::new(former_ngram.clone()))
+                {
+                    hash_map::Entry::Occupied(o) => {
+                        let o = o.into_mut();
+                        log::trace!("Merged into existing case-equivalence class {o:#?}");
+                        o.add_casing(former_ngram, former_data);
+                        log::trace!("Result of equivalence class merging is {o:#?}");
+                    }
+                    hash_map::Entry::Vacant(v) => {
+                        v.insert(CaseEquivalentData::new(former_ngram, former_data));
+                    }
+                }
+            } else {
+                // If the ngram is rejected, log it for posterity
+                log::trace!("Rejected ngram {former_ngram:?} with {former_data:?} from the dataset due to insufficient occurences");
+            }
+        }
+    }
+}
+//
+impl From<DatasetBuilder> for DatasetFiles {
+    fn from(value: DatasetBuilder) -> Self {
+        value.finish_file()
+    }
+}
+
+/// Accumulated knowledge from one or more input data files
+///
+/// Produced from [`DatasetBuilder`] once done accumulating data about a single
+/// input file. Can be used to aggregate data from all input data files, then
+/// turned into a [`Dataset`] once done.
+pub struct DatasetFiles(HashMap<UniCase<Ngram>, CaseEquivalentData>);
+//
+impl DatasetFiles {
     /// Merge with data from another file
     pub fn merge(&mut self, other: Self) {
         for (name, stats) in other.0 {
@@ -251,106 +359,13 @@ impl DatasetMerger {
     }
 }
 //
-impl From<DatasetMerger> for Dataset {
-    fn from(value: DatasetMerger) -> Self {
+impl From<DatasetFiles> for Dataset {
+    fn from(value: DatasetFiles) -> Self {
         value.finish()
     }
 }
 
-/// Mechanism for collecting the dataset into an ordered Arrow table
-pub struct DatasetBuilder {
-    /// Data collection configuration
-    config: Arc<Config>,
-
-    /// Last accepted ngram, if any, and accumulated stats associated with it
-    current_ngram_and_data: Option<(Ngram, NgramDataBuilder)>,
-
-    /// Data from previous ngrams, grouped by case equivalence classes
-    equivalence_classes: HashMap<UniCase<Ngram>, CaseEquivalentData>,
-}
-//
-impl DatasetBuilder {
-    /// Set up the accumulator
-    pub fn new(config: Arc<Config>) -> Self {
-        Self {
-            config,
-            current_ngram_and_data: None,
-            equivalence_classes: HashMap::new(),
-        }
-    }
-
-    /// Integrate a new dataset entry
-    ///
-    /// Dataset entries should be added in the order where they come in data
-    /// files: sorted by ngram, then by increasing year.
-    pub fn add_entry(&mut self, entry: Entry) {
-        // If the entry is associated with the current ngram, merge it into the
-        // current ngram's statistics
-        if let Some((ngram, data)) = &mut self.current_ngram_and_data {
-            if *ngram == entry.ngram {
-                data.add_year(entry.data);
-                return;
-            }
-        }
-
-        // Otherwise, flush the current ngram statistics and make the current
-        // entry the new current ngram
-        self.switch_ngram(Some((entry.ngram, NgramDataBuilder::from(entry.data))));
-    }
-
-    /// Export final statistics at end of dataset processing
-    pub fn finish_file(mut self) -> DatasetMerger {
-        self.switch_ngram(None);
-        DatasetMerger(self.equivalence_classes)
-    }
-
-    /// Integrate the current ngram into the file statistics and switch to a
-    /// different one (or none at all)
-    ///
-    /// This should be done when it is established that no other entry for this
-    /// ngram will come, either because we just moved to a different ngram
-    /// within the data file or because we reached the end of the data file.
-    fn switch_ngram(&mut self, new_ngram_and_data: Option<(Ngram, NgramDataBuilder)>) {
-        // Update current ngram and get former ngram data, if any
-        if let Some((former_ngram, former_data)) =
-            std::mem::replace(&mut self.current_ngram_and_data, new_ngram_and_data)
-        {
-            // Check if there are sufficient statistics to accept this ngram
-            if former_data.stats.match_count() >= self.config.min_matches
-                && former_data.stats.min_volume_count() >= self.config.min_books
-            {
-                // If so, normalize the ngram with non-word rejection...
-                let Some(former_ngram) = file::normalizing_filter_map(former_ngram) else {
-                    // Ngram does not look like a word, rejecting it...
-                    return;
-                };
-
-                // ...then record it into the case-insensitive file statistics
-                log::trace!("Accepted ngram {former_ngram:?} with {former_data:?} into current file statistics");
-                let former_data = former_data.build();
-                match self
-                    .equivalence_classes
-                    .entry(UniCase::new(former_ngram.clone()))
-                {
-                    hash_map::Entry::Occupied(o) => {
-                        let o = o.into_mut();
-                        log::trace!("Merged into existing case-equivalence class {o:#?}");
-                        o.add_casing(former_ngram, former_data);
-                        log::trace!("Result of equivalence class merging is {o:#?}");
-                    }
-                    hash_map::Entry::Vacant(v) => {
-                        v.insert(CaseEquivalentData::new(former_ngram, former_data));
-                    }
-                }
-            } else {
-                // If the ngram is rejected, log it for posterity
-                log::trace!("Rejected ngram {former_ngram:?} with {former_data:?} from file statistics due to insufficient occurences");
-            }
-        }
-    }
-}
-
-/// Data about a single ngram case equivalence class
+/// Accumulator for data about a single ngram case equivalence class
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CaseEquivalentData {
     /// All-time statistics aggregated across the entire equivalence class
@@ -361,25 +376,6 @@ struct CaseEquivalentData {
 }
 //
 impl CaseEquivalentData {
-    /// Aggregated statistics across all equivalent casings
-    pub fn stats(&self) -> NgramStats {
-        self.stats
-    }
-
-    /// Iterate over casings within this case equivalence class
-    ///
-    /// For each case-equivalent ngram, you get...
-    /// - All-time statistics across all years this ngram was recorded
-    /// - The ngram that we are talking about
-    /// - Detailed yearly data, ordered from most recent to most ancient
-    ///
-    /// The ngrams themselves do not follow any particular order
-    pub fn into_casings(self) -> impl Iterator<Item = (NgramStats, Ngram, Box<[YearData]>)> {
-        self.casings
-            .into_iter()
-            .map(|(ngram, data)| (data.stats, ngram, data.years))
-    }
-
     /// Create a case equivalence class from a single ngram
     pub fn new(ngram: Ngram, data: NgramData) -> Self {
         Self {
@@ -388,10 +384,7 @@ impl CaseEquivalentData {
         }
     }
 
-    /// Add a new case-equivalent ngram to these stats
-    ///
-    /// It is assumed that you have checked that this ngram is indeed
-    /// case-equivalent to the one that the stats were created with.
+    /// Add a new case-equivalent ngram
     pub fn add_casing(&mut self, ngram: Ngram, data: NgramData) {
         // Add ngram statistics to the case-equivalent statistics
         self.stats.merge_equivalent(data.stats);
@@ -422,7 +415,7 @@ impl CaseEquivalentData {
     }
 }
 
-/// Accumulated data about an ngram, collected by NgramDataBuilder
+/// Accumulated data about a single (case-sensitive) ngram
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NgramData {
     /// Statistics aggregated over all years of occurence
@@ -433,7 +426,11 @@ struct NgramData {
 }
 //
 impl NgramData {
-    /// Merge data from another tag-equivalent ngram
+    /// Merge data from another identical ngram, with the same casing
+    ///
+    /// Identical ngrams typically appear as a result of normalization
+    /// operations, including removal of grammar tags or decomposition of ngrams
+    /// that are internally composed of multiple independent words.
     fn merge_equivalent(&mut self, other: Self) {
         // First, merge in the statistical data
         self.stats.merge_equivalent(other.stats);
@@ -475,14 +472,8 @@ impl NgramData {
         self.years = years.into();
     }
 }
-//
-impl From<NgramDataBuilder> for NgramData {
-    fn from(value: NgramDataBuilder) -> Self {
-        value.build()
-    }
-}
 
-/// Mechanism for collecting data about a single (case-sensitive) ngram
+/// Accumulator for yearly data from a single (case-sensitive) ngram
 #[derive(Debug)]
 struct NgramDataBuilder {
     /// Yearly data aggregated so far
@@ -502,8 +493,8 @@ impl NgramDataBuilder {
     /// Yearly entries should be merged in the order that they appear in data
     /// files, i.e. from least recent to most recent.
     fn add_year(&mut self, data: YearData) {
-        self.years.push_front(data);
         self.stats.add_year(data);
+        self.years.push_front(data);
     }
 
     /// Finalize the data once we're sure no more yearly data is coming
@@ -521,5 +512,11 @@ impl From<YearData> for NgramDataBuilder {
             stats: NgramStats::from(data),
             years: std::iter::once(data).collect(),
         }
+    }
+}
+//
+impl From<NgramDataBuilder> for NgramData {
+    fn from(value: NgramDataBuilder) -> Self {
+        value.build()
     }
 }
