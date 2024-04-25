@@ -9,33 +9,18 @@ use std::{
 /// Final process configuration
 ///
 /// This is the result of combining digested [`Args`] with language-specific
-/// considerations.
+/// considerations. Please refer to [`Args`] to know more about common fields.
+#[allow(missing_docs)]
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Config {
-    // TODO: "Bad word" exclusion mechanism
-    //
-    /// Whether capitalized ngrams should be ignored
+    /// Truth that capitalized words should be removed from the dataset
     pub strip_capitalized: bool,
-
-    /// Minimum accepted book publication year
     pub min_year: Year,
-
-    /// Minimum accepted number of matches across of books
     pub min_matches: NonZeroU64,
-
-    /// Minimum accepted number of matching books
     pub min_books: NonZeroU64,
-
-    /// In-memory dataset block size
-    pub memory_block: NonZeroUsize,
-
-    /// On-disk dataset block size
-    pub storage_block: NonZeroUsize,
-
-    /// Maximal number of output ngrams
+    pub memory_chunk: NonZeroUsize,
+    pub storage_chunk: NonZeroUsize,
     pub max_outputs: Option<NonZeroUsize>,
-
-    /// Sort output by decreasing popularity
     pub sort_by_popularity: bool,
 }
 //
@@ -43,15 +28,15 @@ impl Config {
     /// Determine process configuration from initialization products
     pub fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
         let min_year = args.min_year();
-        let storage_block = args.storage_block();
+        let storage_chunk = args.storage_chunk();
         let Args {
             language: _,
             strip_odd_capitalized,
             min_year: _,
             min_matches,
             min_books,
-            memory_block,
-            storage_block: _,
+            memory_chunk,
+            storage_chunk: _,
             max_outputs,
             sort_by_popularity,
         } = args;
@@ -60,8 +45,8 @@ impl Config {
             min_year,
             min_matches,
             min_books,
-            memory_block,
-            storage_block,
+            memory_chunk,
+            storage_chunk,
             max_outputs,
             sort_by_popularity,
         })

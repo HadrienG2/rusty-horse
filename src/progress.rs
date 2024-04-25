@@ -13,9 +13,6 @@ pub struct ProgressReport {
 
     /// Progress bar indicating the status of running downloads
     bytes: ProgressBar,
-
-    /// Progress bar indicating the status of sorting ngrams
-    sort: ProgressBar,
 }
 //
 impl ProgressReport {
@@ -32,7 +29,7 @@ impl ProgressReport {
 
         // Prepare to track ongoing downloads
         let bytes = ProgressBar::new(0)
-            .with_prefix("Downloading and processing data")
+            .with_prefix("Downloading and extracting data")
             .with_style(
                 ProgressStyle::with_template(
                     "{prefix} {wide_bar} {bytes}/{total_bytes} ({bytes_per_sec})",
@@ -41,14 +38,10 @@ impl ProgressReport {
             );
 
         // Prepare to track ngram sorting
-        let sort = ProgressBar::new(0)
-            .with_prefix("Picking the top ngrams")
-            .with_style(ProgressStyle::with_template("{prefix} {wide_bar} {pos}/{len}").unwrap());
         Arc::new(Self {
             multi,
             start,
             bytes,
-            sort,
         })
     }
 
@@ -98,49 +91,6 @@ impl ProgressReport {
         if self.bytes.position() == curr_len && self.start.is_finished() {
             self.bytes.finish_and_clear();
             self.multi.remove(&self.bytes);
-        }
-    }
-
-    /// Start tracking the final ngrams sort
-    pub fn start_sort(&self, num_ngrams: usize) {
-        // Make sure that we are ready to sort
-        assert!(
-            self.start.is_finished() && self.bytes.is_finished(),
-            "should not start sorting ngrams before they have all been collected"
-        );
-
-        // Make sure that we have not sorted already
-        assert_eq!(
-            self.sort.length(),
-            Some(0),
-            "should only start sorting once"
-        );
-
-        // Prepare to track the sort
-        self.sort.inc_length(num_ngrams as _);
-        self.multi.add(self.sort.clone());
-    }
-
-    /// Track that some ngrams have been sorted
-    pub fn inc_sorted(&self, num_ngrams: usize) {
-        // Make sure we don't overflow the sorting counter
-        let curr_len = self.sort.length().unwrap_or(0);
-        assert!(
-            (curr_len - self.sort.position())
-                .checked_sub(num_ngrams as _)
-                .is_some(),
-            "attempted to sort more than expected"
-        );
-        assert!(
-            !self.sort.is_finished(),
-            "should not keep sorting after declaring sorting finished"
-        );
-
-        // Track the ongoing sort
-        self.sort.inc(num_ngrams as _);
-        if self.sort.position() == curr_len {
-            self.sort.finish_and_clear();
-            self.multi.remove(&self.sort);
         }
     }
 }

@@ -67,13 +67,13 @@ struct Args {
     #[arg(short = 'b', long, default_value = "10")]
     min_books: NonZeroU64,
 
-    /// In-memory dataset block size
+    /// In-memory dataset chunk size
     ///
-    /// Data which is resident in memory is chunked into blocks of a certain
-    /// number of case-equivalent ngrams, which are independent from each other.
-    /// This enables easy parallelization and asynchronism.
+    /// Data which is resident in memory is sliced into chunks of a certain
+    /// number of ngrams case equivalence classes, which are independent from
+    /// each other. This enables easy parallelization and asynchronism.
     ///
-    /// The associated block size is a tunable parameter, which should be
+    /// The associated chunk size is a tunable parameter, which should be
     /// adjusted until optimal performance is observed. If it is set too low,
     /// constant overheads for spawning parallel/asynchronous tasks will not be
     /// properly amortized. But if it is set too high, parallel load balancing
@@ -81,21 +81,17 @@ struct Args {
     //
     // FIXME: Tune this to sensible defaults
     #[arg(long, default_value = "1024")]
-    memory_block: NonZeroUsize,
+    memory_chunk: NonZeroUsize,
 
-    /// On-disk dataset block size
+    /// On-disk dataset chunk size
     ///
     /// This is the granularity at which dataset entries are written to or
     /// loaded from storage. It will be rounded up to the next multiple of the
-    /// in-memory block size.
-    ///
-    /// RAM and storage devices have very different performance characteristics,
-    /// and as a result the optimal granularity for in-memory operations is
-    /// smaller than that for storage operations.
+    /// in-memory chunk size.
     //
     // FIXME: Tune this to sensible defaults
     #[arg(long, default_value = "1048576")]
-    storage_block: NonZeroUsize,
+    storage_chunk: NonZeroUsize,
 
 
     /// Max number of output ngrams
@@ -140,12 +136,12 @@ impl Args {
         self.min_year.unwrap_or(DATASET_PUBLICATION_YEAR - 50)
     }
 
-    /// Storage block size
-    pub fn storage_block(&self) -> NonZeroUsize {
+    /// Storage chunk size
+    pub fn storage_chunk(&self) -> NonZeroUsize {
         NonZeroUsize::new(
-            self.storage_block.get().next_multiple_of(self.memory_block.get()),
+            self.storage_chunk.get().next_multiple_of(self.memory_chunk.get()),
         )
-        .expect("rounding the disk block size to the next multiple of the memory block size shouldn't break the NonZero property")
+        .expect("rounding the disk chunk size to the next multiple of the memory chunk size shouldn't break the NonZero property")
     }
 }
 //
@@ -164,15 +160,15 @@ async fn main() -> Result<()> {
     // Set up progress reporting
     let report = ProgressReport::new(dataset_urls.len());
 
-    // Compute dataset-wide statistics
+    // Collect the dataset
     let config = Config::new(args, language);
     let client = reqwest::Client::new();
-    let full_stats =
-        file::download_and_process_all(config.clone(), client, dataset_urls, report.clone())
+    let dataset =
+        file::download_and_collect(config.clone(), client, dataset_urls, report.clone())
             .await?;
 
     // Pick the most frequent ngrams across all data files
-    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, full_stats, &report);
+    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset);
     for ngram in ngrams_by_decreasing_stats {
         println!("{ngram}");
     }

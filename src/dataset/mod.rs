@@ -5,25 +5,9 @@
 //! - Everything is sorted by decreasing popularity/year to enable early exit
 //!   when some user cutoff is reached.
 
-// FIXME: Add users, then remove this
-#![allow(unused)]
-
 pub mod builder;
 
-use crate::{
-    add_nz_u64,
-    config::Config,
-    file::{self, Entry, YearData},
-    stats::NgramStats,
-    Ngram, Year, YearMatchCount, YearVolumeCount,
-};
-use rayon::prelude::*;
-use std::{
-    cmp::{Ordering, Reverse},
-    collections::{hash_map, BTreeMap, BinaryHeap, HashMap, VecDeque},
-    sync::Arc,
-};
-use unicase::UniCase;
+use crate::{file::YearData, Year, YearMatchCount, YearVolumeCount};
 
 /// Cumulative knowledge aggregated from files of the Google Books dataset
 ///
@@ -33,6 +17,7 @@ pub struct Dataset(Box<[DatasetBlock]>);
 //
 impl Dataset {
     /// Iterate sequentially over all case classes in the dataset
+    #[allow(unused)]
     pub fn case_classes(&self) -> impl Iterator<Item = CaseClassView<'_>> {
         self.blocks().iter().flat_map(DatasetBlock::case_classes)
     }
@@ -126,8 +111,8 @@ pub struct CaseClassView<'dataset> {
 impl<'dataset> CaseClassView<'dataset> {
     /// Iterate over ngrams within this case class
     pub fn ngrams(self) -> impl Iterator<Item = NgramView<'dataset>> {
-        let mut last_str_end = 0;
-        let mut last_data_end = 0;
+        let mut last_str_end = self.ngrams_str_start;
+        let mut last_data_end = self.ngram_data_start;
         (self.ngram_str_ends.iter().copied())
             .zip(self.ngram_data_ends.iter().copied())
             .map(move |(str_end, data_end)| {
@@ -150,6 +135,7 @@ impl<'dataset> CaseClassView<'dataset> {
 }
 //
 /// Ngram from the dataset
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct NgramView<'dataset> {
     /// Text of this ngram
     ngram: &'dataset str,

@@ -1,7 +1,7 @@
 //! Processing of an individual data file
 
 use crate::{
-    config::Config, dataset::builder::DatasetBuilder, progress::ProgressReport, stats::{FileStats, FileStatsBuilder}, Ngram, Result, Year, YearMatchCount, YearVolumeCount
+    config::Config, dataset::{builder::{DatasetBuilder, DatasetFiles}, Dataset}, progress::ProgressReport, Ngram, Result, Year, YearMatchCount, YearVolumeCount
 };
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipDecoder;
@@ -9,7 +9,6 @@ use csv_async::AsyncReaderBuilder;
 use futures::{future, stream::StreamExt, TryStreamExt};
 use reqwest::Response;
 use serde::Deserialize;
-use std::collections::hash_map;
 use std::{
     io::{self, ErrorKind},
     sync::Arc,
@@ -17,17 +16,17 @@ use std::{
 use tokio::task::JoinSet;
 use tokio_util::io::StreamReader;
 
-/// Download and process a set of data files, merge results
-pub async fn download_and_process_all(
+/// Download a set of data files, extract their data and collect it in one place
+pub async fn download_and_collect(
     config: Arc<Config>,
     client: reqwest::Client,
     urls: impl IntoIterator<Item = Box<str>>,
     report: Arc<ProgressReport>,
-) -> Result<FileStats> {
+) -> Result<Dataset> {
     // Start downloading and processing all the files
     let mut data_files = JoinSet::new();
     for url in urls {
-        data_files.spawn(download_and_process(
+        data_files.spawn(download_and_extract(
             config.clone(),
             client.clone(),
             url,
@@ -36,27 +35,22 @@ pub async fn download_and_process_all(
     }
 
     // Collect and merge statistics from data files as downloads finish
-    let mut dataset_stats = FileStats::new();
+    let mut dataset = DatasetFiles::new(config);
     while let Some(file_stats) = data_files.join_next().await {
-        for (name, stats) in file_stats.context("collecting results from one data file")?? {
-            match dataset_stats.entry(name) {
-                hash_map::Entry::Occupied(o) => o.into_mut().merge_files(stats),
-                hash_map::Entry::Vacant(v) => {
-                    v.insert(stats);
-                }
-            }
-        }
+        dataset.merge(
+            file_stats.context("collecting results from one data file")??
+        )
     }
-    Ok(dataset_stats)
+    Ok(dataset.finish())
 }
 
-/// Start downloading and processing a data file
-pub async fn download_and_process(
+/// Download a data file and extract the data inside
+pub async fn download_and_extract(
     config: Arc<Config>,
     client: reqwest::Client,
     url: Box<str>,
     report: Arc<ProgressReport>,
-) -> Result<FileStats> {
+) -> Result<DatasetFiles> {
     // Start the download
     let context = || format!("initiating download of {url}");
     let response = client
@@ -91,15 +85,13 @@ pub async fn download_and_process(
     let mut entries = entries.try_filter(move |entry| future::ready(early_filter(entry)));
 
     // Accumulate data from TSV entries
-    let mut dataset = DatasetBuilder::new(config.clone());
-    let mut stats = FileStatsBuilder::new(config);
+    let mut dataset = DatasetBuilder::new(config);
     let context = || format!("fetching and processing {url}");
     while let Some(entry) = entries.next().await {
         let entry = entry.with_context(context)?;
         dataset.add_entry(entry.clone());
-        stats.add_entry(entry);
     }
-    Ok(stats.finish_file())
+    Ok(dataset.finish_file())
 }
 
 /// Entry from the dataset

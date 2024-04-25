@@ -143,6 +143,14 @@ pub struct DatasetFiles {
 }
 //
 impl DatasetFiles {
+    /// Create an empty accumulator
+    pub fn new(config: Arc<Config>) -> Self {
+        Self {
+            config,
+            data: HashMap::new(),
+        }
+    }
+
     /// Merge with data from another file
     pub fn merge(&mut self, other: Self) {
         for (name, stats) in other.data {
@@ -173,7 +181,7 @@ impl DatasetFiles {
 
         // Convert the ordered data into the final dataset layout
         let dataset_blocks = case_classes
-            .par_chunks(self.config.memory_block.get())
+            .par_chunks(self.config.memory_chunk.get())
             .map(|chunk| {
                 let mut builder = DatasetBlockBuilder::new();
                 for (_stats, casings) in chunk {
