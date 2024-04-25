@@ -6,42 +6,91 @@ use crate::{
     stats::NgramStats,
 };
 use rayon::prelude::*;
-use std::{collections::BinaryHeap, num::NonZeroUsize};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, VecDeque},
+    num::NonZeroUsize,
+};
 
 /// Pick the top ngrams from the aggregated dataset
 pub fn pick_top_ngrams<'dataset>(
     config: &Config,
     dataset: &'dataset Dataset,
 ) -> Vec<&'dataset str> {
-    // Iterate over blocks of case equivalence classes
+    // Map each case equivalence class into a tuple of global statistics over
+    // all ngrams + most common ngrams, or discard the case equivalence class
     let stats_and_ngrams = (dataset.blocks().par_iter()).flat_map(|block| {
-        // For each case equivalence class, determine the overall usage
-        // statistics and most frequent casing over the time period of interest.
         (block.case_classes())
             .filter_map(|class| case_class_filter_map(config, class))
             .collect::<Vec<_>>()
     });
 
-    // If the output is unbounded and unsorted, just dump the ngrams quickly
-    if config.max_outputs.is_none() && !config.sort_by_popularity {
-        return stats_and_ngrams.map(|(_stats, ngram)| ngram).collect();
-    }
+    // What happens next depends on the output configuration
+    match (
+        config.max_outputs.map(NonZeroUsize::get),
+        config.sort_by_popularity,
+    ) {
+        // If there is no sorting and no limit, just dump the ngrams as-is
+        (None, false) => stats_and_ngrams.map(|(_stats, ngram)| ngram).collect(),
 
-    // Otherwise, sort the ngrams by popularity, picking the most frequent ones
-    // if requested
-    let mut result = if let Some(max_outputs) = config.max_outputs {
-        Vec::with_capacity(max_outputs.get())
-    } else {
-        Vec::new()
-    };
-    let mut stats_and_ngrams = stats_and_ngrams.collect::<BinaryHeap<_>>();
-    while let Some((_stats, ngram)) = stats_and_ngrams.pop() {
-        result.push(ngram);
-        if result.len() == config.max_outputs.map_or(usize::MAX, NonZeroUsize::get) {
-            return result;
+        // If there is sorting without a limit on the output size, sort the
+        // ngrams then dump them
+        (None, true) => {
+            let mut sorted = stats_and_ngrams.collect::<Vec<_>>();
+            sorted.par_sort_unstable_by_key(|(stats, _ngram)| *stats);
+            (sorted.into_par_iter())
+                .map(|(_stats, ngram)| ngram)
+                .collect()
+        }
+
+        // If there is a limit, then...
+        (Some(max_len), sort) => {
+            // Find the top ngrams up to this limit
+            let mut top_stats_and_ngrams = stats_and_ngrams
+                // First determine top ngrams on each thread using a min-heap...
+                .fold(
+                    || BinaryHeap::with_capacity(max_len),
+                    |mut heap, (stats, ngram)| {
+                        heap.push((Reverse(stats), ngram));
+                        if heap.len() > max_len {
+                            heap.pop();
+                        }
+                        heap
+                    },
+                )
+                // ...then merge thread results into a global result
+                .reduce(BinaryHeap::new, |heap1, heap2| {
+                    let (mut dst, mut src) = if heap1.len() >= heap2.len() {
+                        (heap1, heap2)
+                    } else {
+                        (heap2, heap1)
+                    };
+                    while let Some(elem) = src.pop() {
+                        dst.push(elem);
+                        if dst.len() > max_len {
+                            dst.pop();
+                        }
+                    }
+                    dst
+                });
+
+            // If not asked to sort, return results in heap order
+            if !sort {
+                return top_stats_and_ngrams
+                    .into_iter()
+                    .map(|(_stats, ngram)| ngram)
+                    .collect();
+            }
+
+            // Otherwise, collect the results in order of decreasing popularity
+            // This will require an order reversal since we used a min-heap.
+            let mut result = VecDeque::with_capacity(top_stats_and_ngrams.len());
+            while let Some((_stats, ngram)) = top_stats_and_ngrams.pop() {
+                result.push_front(ngram);
+            }
+            result.into()
         }
     }
-    result
 }
 
 /// Turn a case equivalence class from the dataset into a most common spelling +

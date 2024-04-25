@@ -13,7 +13,7 @@ mod top;
 use crate::{config::Config, progress::ProgressReport};
 use clap::Parser;
 use log::LevelFilter;
-use std::num::{NonZeroU64, NonZeroU32, NonZeroUsize};
+use std::{io::Write, num::{NonZeroU64, NonZeroU32, NonZeroUsize}};
 
 /// TODO: User-visible program description
 ///
@@ -172,8 +172,9 @@ async fn main() -> Result<()> {
 
     // Pick the most frequent ngrams across all data files
     let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset);
+    let mut stdout = std::io::stdout().lock();
     for ngram in ngrams_by_decreasing_stats {
-        println!("{ngram}");
+        writeln!(stdout, "{ngram}")?;
     }
     Ok(())
 }
