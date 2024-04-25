@@ -129,9 +129,7 @@ fn case_class_filter_map<'dataset>(
         let Some(ngram_stats) = ngram_stats else {
             continue 'casings;
         };
-        if ngram_stats.match_count() < config.min_matches
-            || ngram_stats.min_volume_count() < config.min_books
-        {
+        if !ngram_stats.is_acceptable(config) {
             continue 'casings;
         }
 

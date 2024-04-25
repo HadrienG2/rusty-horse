@@ -4,13 +4,14 @@
 
 mod config;
 mod dataset;
-mod file;
 mod languages;
 mod progress;
 mod stats;
 mod top;
+mod tsv;
 
 use crate::{config::Config, progress::ProgressReport};
+use serde::Deserialize;
 use clap::Parser;
 use log::LevelFilter;
 use std::{io::Write, num::{NonZeroU64, NonZeroU32, NonZeroUsize}};
@@ -167,7 +168,7 @@ async fn main() -> Result<()> {
     let config = Config::new(args, language);
     let client = reqwest::Client::new();
     let dataset =
-        file::download_and_collect(config.clone(), client, dataset_urls, report.clone())
+        tsv::download_and_collect(config.clone(), client, dataset_urls, report.clone())
             .await?;
 
     // Pick the most frequent ngrams across all data files
@@ -187,6 +188,19 @@ pub const DATASET_PUBLICATION_YEAR: Year = 2012;
 
 /// Case-sensitive ngram
 pub type Ngram = Box<str>;
+
+/// Yearly data about an ngram's usage
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
+pub struct YearData {
+    /// Year on which the data was recorded
+    pub year: Year,
+
+    /// Number of recorded occurences
+    pub match_count: YearMatchCount,
+
+    /// Number of books across which occurences were recorded
+    pub volume_count: YearVolumeCount,
+}
 
 /// Year of Gregorian Calendar
 pub type Year = i16;

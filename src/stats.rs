@@ -1,6 +1,6 @@
 //! Ngram usage statistics
 
-use crate::{add_nz_u64, file::YearData, Year};
+use crate::{add_nz_u64, config::Config, Year, YearData};
 use std::{cmp::Ordering, num::NonZeroU64};
 
 /// Cumulative knowledge about a single ngram or case equivalence class
@@ -17,35 +17,18 @@ pub struct NgramStats {
 
     /// Lower bound on the number of books with matches over period of interest
     ///
-    /// Is an exact count as long as the stats only cover a single ngram
-    /// casing, but becomes a lower bound when equivalent casing are merged.
+    /// Is an exact count as long as the stats only cover a single ngram, but
+    /// becomes a lower bound as soon equivalent ngrams are merged in.
     min_volume_count: NonZeroU64,
 }
 //
 impl NgramStats {
-    /// Year of first occurence
-    #[allow(unused)]
-    pub fn first_year(&self) -> Year {
-        self.first_year
-    }
-
-    /// Year of last occurence
-    #[allow(unused)]
-    pub fn last_year(&self) -> Year {
-        self.last_year
-    }
-
-    /// Total number of matches over the period of interest
-    pub fn match_count(&self) -> NonZeroU64 {
-        self.match_count
-    }
-
-    /// Lower bound on the number of books with matches
-    ///
-    /// Is an exact count as long as the stats only cover a single ngram casing,
-    /// but becomes a lower bound when equivalent ngrams are merged.
-    pub fn min_volume_count(&self) -> NonZeroU64 {
-        self.min_volume_count
+    /// Truth that an ngram with these usage statistics can be accepted with the
+    /// current configuration, if other criteria pass
+    pub fn is_acceptable(&self, config: &Config) -> bool {
+        config.min_matches <= self.match_count
+            && config.min_books <= self.min_volume_count
+            && config.min_year <= self.last_year
     }
 
     /// Update statistics with a new yearly entry

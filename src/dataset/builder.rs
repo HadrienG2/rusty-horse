@@ -4,9 +4,9 @@ use super::{Dataset, DatasetBlock};
 use crate::{
     add_nz_u64,
     config::Config,
-    file::{self, Entry, YearData},
     stats::NgramStats,
-    Ngram, Year, YearMatchCount, YearVolumeCount,
+    tsv::{self, Entry},
+    Ngram, Year, YearData, YearMatchCount, YearVolumeCount,
 };
 use rayon::prelude::*;
 use std::{
@@ -86,11 +86,9 @@ impl DatasetBuilder {
             std::mem::replace(&mut self.current_ngram_and_data, new_ngram_and_data)
         {
             // Check if there are sufficient statistics to accept this ngram
-            if former_data.stats.match_count() >= self.config.min_matches
-                && former_data.stats.min_volume_count() >= self.config.min_books
-            {
+            if former_data.stats.is_acceptable(&self.config) {
                 // If so, normalize the ngram with non-word rejection...
-                let Some(former_ngram) = file::normalizing_filter_map(former_ngram) else {
+                let Some(former_ngram) = tsv::normalizing_filter_map(former_ngram) else {
                     // Ngram does not look like a word, rejecting it...
                     return;
                 };

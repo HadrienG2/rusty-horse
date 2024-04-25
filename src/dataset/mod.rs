@@ -7,7 +7,7 @@
 
 pub mod builder;
 
-use crate::{file::YearData, Year, YearMatchCount, YearVolumeCount};
+use crate::{Year, YearData, YearMatchCount, YearVolumeCount};
 
 /// Cumulative knowledge aggregated from files of the Google Books dataset
 ///

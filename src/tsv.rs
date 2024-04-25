@@ -1,6 +1,7 @@
-//! Processing of an individual data file
+//! Processing of an individual gzipped TSV data file from Google
 
 use crate::{
+    YearData,
     config::Config, dataset::{builder::{DatasetBuilder, DatasetFiles}, Dataset}, progress::ProgressReport, Ngram, Result, Year, YearMatchCount, YearVolumeCount
 };
 use anyhow::Context;
@@ -36,9 +37,9 @@ pub async fn download_and_collect(
 
     // Collect and merge statistics from data files as downloads finish
     let mut dataset = DatasetFiles::new(config);
-    while let Some(file_stats) = data_files.join_next().await {
+    while let Some(file_data) = data_files.join_next().await {
         dataset.merge(
-            file_stats.context("collecting results from one data file")??
+            file_data.context("collecting results from one data file")??
         )
     }
     Ok(dataset.finish())
@@ -122,20 +123,6 @@ impl Entry {
             volume_count: self.volume_count,
         }
     }
-}
-
-/// Yearly data subset of a dataset entry
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq)]
-pub struct YearData {
-    /// Year on which the data was recorded
-    pub year: Year,
-
-    /// Number of recorded occurences
-    pub match_count: YearMatchCount,
-
-    /// Number of books across which occurences were recorded
-    pub volume_count: YearVolumeCount,
-    
 }
 
 /// Build the early entry filter
