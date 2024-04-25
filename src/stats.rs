@@ -83,8 +83,8 @@ impl FileStatsBuilder {
             std::mem::replace(&mut self.current_ngram_and_stats, new_ngram_and_stats)
         {
             // Check if there are sufficient statistics to accept this ngram
-            if former_stats.match_count.get() >= self.config.min_matches
-                && former_stats.min_volume_count.get() >= self.config.min_books
+            if former_stats.match_count >= self.config.min_matches
+                && former_stats.min_volume_count >= self.config.min_books
             {
                 // If so, normalize the ngram with non-word rejection...
                 let Some(former_ngram) = file::normalizing_filter_map(former_ngram) else {
@@ -217,16 +217,16 @@ impl NgramStats {
     }
 
     /// Total number of matches over the period of interest
-    pub fn match_count(&self) -> u64 {
-        self.match_count.get()
+    pub fn match_count(&self) -> NonZeroU64 {
+        self.match_count
     }
 
     /// Lower bound on the number of books with matches
     ///
     /// Is an exact count as long as the stats only cover a single ngram casing,
     /// but becomes a lower bound when equivalent ngrams are merged.
-    pub fn min_volume_count(&self) -> u64 {
-        self.min_volume_count.get()
+    pub fn min_volume_count(&self) -> NonZeroU64 {
+        self.min_volume_count
     }
 
     /// Update statistics with a new yearly entry

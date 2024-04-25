@@ -1,7 +1,10 @@
 //! Processing pipeline configuration
 
 use crate::{languages::LanguageInfo, Args, Year};
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+};
 
 /// Final process configuration
 ///
@@ -18,10 +21,16 @@ pub struct Config {
     pub min_year: Year,
 
     /// Minimum accepted number of matches across of books
-    pub min_matches: u64,
+    pub min_matches: NonZeroU64,
 
     /// Minimum accepted number of matching books
-    pub min_books: u64,
+    pub min_books: NonZeroU64,
+
+    /// In-memory dataset block size
+    pub memory_block: NonZeroUsize,
+
+    /// On-disk dataset block size
+    pub storage_block: NonZeroUsize,
 
     /// Maximal number of output ngrams
     pub max_outputs: Option<NonZeroUsize>,
@@ -34,12 +43,15 @@ impl Config {
     /// Determine process configuration from initialization products
     pub fn new(args: Args, language: LanguageInfo) -> Arc<Self> {
         let min_year = args.min_year();
+        let storage_block = args.storage_block();
         let Args {
             language: _,
             strip_odd_capitalized,
             min_year: _,
             min_matches,
             min_books,
+            memory_block,
+            storage_block: _,
             max_outputs,
             sort_by_popularity,
         } = args;
@@ -48,6 +60,8 @@ impl Config {
             min_year,
             min_matches,
             min_books,
+            memory_block,
+            storage_block,
             max_outputs,
             sort_by_popularity,
         })

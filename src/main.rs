@@ -2,7 +2,6 @@
 //! documentation you can find at
 //! <http://storage.googleapis.com/books/ngrams/books/datasetsv3.html>.
 
-mod cache;
 mod config;
 mod dataset;
 mod file;
@@ -57,16 +56,47 @@ struct Args {
     /// Extremely rare words are not significantly more memorable than random
     /// characters. Therefore we ignore words which occur too rarely in the
     /// selected dataset section.
-    #[arg(short = 'm', long, default_value_t = 6000)]
-    min_matches: u64,
+    #[arg(short = 'm', long, default_value = "6000")]
+    min_matches: NonZeroU64,
 
     /// Minimum accepted number of matching books
     ///
     /// If a word only appears in a book or two, it may be a neologism from the
     /// author, or the product of an OCR error. Therefore, we only consider
     /// words which are seen in a sufficiently large number of books.
-    #[arg(short = 'b', long, default_value_t = 10)]
-    min_books: u64,
+    #[arg(short = 'b', long, default_value = "10")]
+    min_books: NonZeroU64,
+
+    /// In-memory dataset block size
+    ///
+    /// Data which is resident in memory is chunked into blocks of a certain
+    /// number of case-equivalent ngrams, which are independent from each other.
+    /// This enables easy parallelization and asynchronism.
+    ///
+    /// The associated block size is a tunable parameter, which should be
+    /// adjusted until optimal performance is observed. If it is set too low,
+    /// constant overheads for spawning parallel/asynchronous tasks will not be
+    /// properly amortized. But if it is set too high, parallel load balancing
+    /// will be less effective and CPU caches will be used less efficiently.
+    //
+    // FIXME: Tune this to sensible defaults
+    #[arg(long, default_value = "1024")]
+    memory_block: NonZeroUsize,
+
+    /// On-disk dataset block size
+    ///
+    /// This is the granularity at which dataset entries are written to or
+    /// loaded from storage. It will be rounded up to the next multiple of the
+    /// in-memory block size.
+    ///
+    /// RAM and storage devices have very different performance characteristics,
+    /// and as a result the optimal granularity for in-memory operations is
+    /// smaller than that for storage operations.
+    //
+    // FIXME: Tune this to sensible defaults
+    #[arg(long, default_value = "1048576")]
+    storage_block: NonZeroUsize,
+
 
     /// Max number of output ngrams
     ///
@@ -108,6 +138,14 @@ impl Args {
     /// Minimal book publication year cutoff
     pub fn min_year(&self) -> Year {
         self.min_year.unwrap_or(DATASET_PUBLICATION_YEAR - 50)
+    }
+
+    /// Storage block size
+    pub fn storage_block(&self) -> NonZeroUsize {
+        NonZeroUsize::new(
+            self.storage_block.get().next_multiple_of(self.memory_block.get()),
+        )
+        .expect("rounding the disk block size to the next multiple of the memory block size shouldn't break the NonZero property")
     }
 }
 //

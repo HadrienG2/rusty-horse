@@ -1,13 +1,6 @@
-//! Reorganization of the Google dataset to better fit our processing needs :
-//!
-//! - Ngrams are grouped by case equivalence classes
-//! - Yearly data does not include unnecessary redundant ngram copies
-//! - Everything is sorted by decreasing popularity/year to enable early exit
-//!   when the user cutoff is reached.
+//! Mechanism for building a [`Dataset`] from the Google Books Ngram input data
 
-// FIXME: Add users, then remove this
-#![allow(unused)]
-
+use super::{Dataset, DatasetBlock};
 use crate::{
     add_nz_u64,
     config::Config,
@@ -22,152 +15,6 @@ use std::{
     sync::Arc,
 };
 use unicase::UniCase;
-
-/// Cumulative knowledge aggregated from all files of the Google Books dataset
-///
-/// Case equivalence classes and ngrams are sorted by decreasing all-time usage
-/// frequency, and for each ngram, data columns are sorted by decreasing year.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Dataset {
-    /// Offsets that mark the end of each case equivalence class in the
-    /// "ngram_str_ends" and "ngram_data_ends" arrays
-    case_class_ends: Box<[usize]>,
-
-    /// Offsets that mark the end of each ngram in the "ngrams" string
-    //
-    // TODO: Try delta encoding to shrink dataset size
-    ngram_str_ends: Box<[usize]>,
-
-    /// Concatenated ngrams from all equivalence classes
-    ngrams: Box<str>,
-
-    /// Offsets that mark the end of the yearly data from each ngram in the
-    /// "years", "match_counts" and "volume_counts" arrays
-    //
-    // TODO: Try delta encoding to shrink dataset size
-    ngram_data_ends: Box<[usize]>,
-
-    /// Concatenated "year" data columns from all ngrams
-    years: Box<[Year]>,
-
-    /// Concatenated "match_count" data columns from all ngrams
-    match_counts: Box<[YearMatchCount]>,
-
-    /// Concatenated "volume_count" data columns from all ngrams
-    volume_counts: Box<[YearVolumeCount]>,
-}
-//
-impl Dataset {
-    /// Iterate over ngram case equivalence classes
-    ///
-    /// Case equivalence classes will be enumerated in decreasing all-time
-    /// popularity order.
-    //
-    // TODO: Make this amenable to parallel iteration over case classes
-    pub fn case_classes(&self) -> impl Iterator<Item = CaseClassView<'_>> {
-        let mut last_class_end = 0;
-        let mut last_str_end = 0;
-        let mut last_data_end = 0;
-        (self.case_class_ends.iter().copied()).map(move |case_class_end| {
-            // Extract relevant data range for this case equivalence class
-            let case_class_range = last_class_end..case_class_end;
-            let ngram_str_ends = &self.ngram_str_ends[case_class_range.clone()];
-            let ngram_data_ends = &self.ngram_data_ends[case_class_range];
-            let result = CaseClassView {
-                dataset: self,
-                ngrams_str_start: last_str_end,
-                ngram_str_ends,
-                ngram_data_start: last_data_end,
-                ngram_data_ends,
-            };
-
-            // Update state variables for next equivalence class
-            last_class_end = case_class_end;
-            last_str_end = *(ngram_str_ends.last()).expect("Case classes should have ngrams");
-            last_data_end = *(ngram_data_ends.last()).expect("Case classes should have data");
-            result
-        })
-    }
-}
-//
-/// Case equivalence class from the dataset
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct CaseClassView<'dataset> {
-    /// Source dataset
-    dataset: &'dataset Dataset,
-
-    /// Offset of the start of this case class in the "ngrams" string
-    ngrams_str_start: usize,
-
-    /// Offsets of the end of each ngram in the "ngrams" string
-    ngram_str_ends: &'dataset [usize],
-
-    /// Offset of the start of this case class in the data arrays
-    ngram_data_start: usize,
-
-    /// Offsets of the end of each ngram in the data arrays
-    ngram_data_ends: &'dataset [usize],
-}
-//
-impl<'dataset> CaseClassView<'dataset> {
-    /// Iterate over ngrams within this case class
-    pub fn ngrams(self) -> impl Iterator<Item = NgramView<'dataset>> {
-        let mut last_str_end = 0;
-        let mut last_data_end = 0;
-        (self.ngram_str_ends.iter().copied())
-            .zip(self.ngram_data_ends.iter().copied())
-            .map(move |(str_end, data_end)| {
-                // Extract relevant data range for this ngram
-                let ngram = &self.dataset.ngrams[last_str_end..str_end];
-                let data_range = last_data_end..data_end;
-                let result = NgramView {
-                    ngram,
-                    years: &self.dataset.years[data_range.clone()],
-                    match_counts: &self.dataset.match_counts[data_range.clone()],
-                    volume_counts: &self.dataset.volume_counts[data_range],
-                };
-
-                // Update state variables for next ngram
-                last_str_end = str_end;
-                last_data_end = data_end;
-                result
-            })
-    }
-}
-//
-/// Ngram from the dataset
-pub struct NgramView<'dataset> {
-    /// Text of this ngram
-    ngram: &'dataset str,
-
-    /// Years where this ngram was seen in books (sorted in decreasing order)
-    years: &'dataset [Year],
-
-    /// Number of matches on each year across all books published that year
-    match_counts: &'dataset [YearMatchCount],
-
-    /// Number of books with matches on each year
-    volume_counts: &'dataset [YearVolumeCount],
-}
-//
-impl<'dataset> NgramView<'dataset> {
-    /// Text of this ngram
-    pub fn ngram(&self) -> &'dataset str {
-        self.ngram
-    }
-
-    /// Yearly data for this ngram, sorted by decreasing year
-    pub fn years(&self) -> impl Iterator<Item = YearData> + 'dataset {
-        (self.years.iter())
-            .zip(self.match_counts)
-            .zip(self.volume_counts)
-            .map(|((&year, &match_count), &volume_count)| YearData {
-                year,
-                match_count,
-                volume_count,
-            })
-    }
-}
 
 /// Accumulator for entries from a single file of the Google Books Ngram dataset
 ///
@@ -220,7 +67,10 @@ impl DatasetBuilder {
     /// Call this when you're done accumulating entries from a source data file.
     pub fn finish_file(mut self) -> DatasetFiles {
         self.switch_ngram(None);
-        DatasetFiles(self.equivalence_classes)
+        DatasetFiles {
+            config: self.config,
+            data: self.equivalence_classes,
+        }
     }
 
     /// Integrate the current ngram into the dataset and switch to a different
@@ -280,15 +130,21 @@ impl From<DatasetBuilder> for DatasetFiles {
 /// Accumulated knowledge from one or more input data files
 ///
 /// Produced from [`DatasetBuilder`] once done accumulating data about a single
-/// input file. Can be used to aggregate data from all input data files, then
+/// input file. Can be used to aggregate data from other input data files, then
 /// turned into a [`Dataset`] once done.
-pub struct DatasetFiles(HashMap<UniCase<Ngram>, CaseEquivalentData>);
+pub struct DatasetFiles {
+    /// Data collection configuration
+    config: Arc<Config>,
+
+    /// Accumulated data
+    data: HashMap<UniCase<Ngram>, CaseEquivalentData>,
+}
 //
 impl DatasetFiles {
     /// Merge with data from another file
     pub fn merge(&mut self, other: Self) {
-        for (name, stats) in other.0 {
-            match self.0.entry(name) {
+        for (name, stats) in other.data {
+            match self.data.entry(name) {
                 hash_map::Entry::Occupied(o) => o.into_mut().merge_equivalent(stats),
                 hash_map::Entry::Vacant(v) => {
                     v.insert(stats);
@@ -299,63 +155,35 @@ impl DatasetFiles {
 
     /// Convert the dataset to its final form
     pub fn finish(self) -> Dataset {
-        // Order case equivalence classes by decreasing stats, then by
-        // lexicographic order
-        let ordered_case_classes = (self.0.into_par_iter())
-            .map(|(ngram, case)| {
-                // Order case-equivalent ngrams similarly within each class
-                let ordered_casings = (case.casings.into_iter())
-                    .map(|(ngram, data)| {
-                        // Yearly data was already ordered as desired (by
-                        // decreasing year) during construction, so it can be
-                        // passed down as is.
-                        let order_key = (Reverse(case.stats), ngram);
-                        (order_key, data.years)
-                    })
-                    .collect::<BTreeMap<_, _>>();
-                let order_key = (Reverse(case.stats), ngram.into_inner());
-                (order_key, ordered_casings)
+        // Order case equivalence classes by decreasing stats...
+        let mut case_classes = (self.data.into_par_iter())
+            .map(|(_key, class)| {
+                // ...and within each class, order ngrams by decreasing stats
+                // Yearly data for each ngram was already ordered by decreasing
+                // year during construction, so no reordering is needed here.
+                let stats = class.stats;
+                let mut casings = class.casings.into_iter().collect::<Vec<_>>();
+                casings.sort_unstable_by_key(|(_ngram, data)| Reverse(data.stats));
+                (stats, casings)
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Vec<_>>();
+        case_classes.par_sort_unstable_by_key(|(stats, _casings)| Reverse(*stats));
 
-        // Collect data into the final dataset layout
-        //
-        // NOTE: If this becomes a sequential bottleneck, it can be parallelized
-        //       by switching the dataset to a block-based format.
-        let mut case_class_ends = Vec::new();
-        let mut ngrams_str_ends = Vec::new();
-        let mut ngrams = String::new();
-        let mut ngrams_data_ends = Vec::new();
-        let mut years = Vec::new();
-        let mut match_counts = Vec::new();
-        let mut volume_counts = Vec::new();
-        for ordered_casings in ordered_case_classes.into_values() {
-            for ((_stats, ngram), years_data) in ordered_casings {
-                ngrams.push_str(&ngram);
-                ngrams_str_ends.push(ngrams.len());
-                for YearData {
-                    year,
-                    match_count,
-                    volume_count,
-                } in years_data.into_vec()
-                {
-                    years.push(year);
-                    match_counts.push(match_count);
-                    volume_counts.push(volume_count);
+        // Convert the ordered data into the final dataset layout
+        let dataset_blocks = case_classes
+            .par_chunks(self.config.memory_block.get())
+            .map(|chunk| {
+                let mut builder = DatasetBlockBuilder::new();
+                for (_stats, casings) in chunk {
+                    let mut case_class = builder.new_case_class();
+                    for (ngram, data) in casings {
+                        case_class.push(ngram, data.years.iter().copied())
+                    }
                 }
-                ngrams_data_ends.push(years.len());
-            }
-            case_class_ends.push(ngrams_str_ends.len());
-        }
-        Dataset {
-            case_class_ends: case_class_ends.into(),
-            ngram_str_ends: ngrams_str_ends.into(),
-            ngrams: ngrams.into(),
-            ngram_data_ends: ngrams_data_ends.into(),
-            years: years.into(),
-            match_counts: match_counts.into(),
-            volume_counts: volume_counts.into(),
-        }
+                builder.build()
+            })
+            .collect::<_>();
+        Dataset(dataset_blocks)
     }
 }
 //
@@ -518,5 +346,82 @@ impl From<YearData> for NgramDataBuilder {
 impl From<NgramDataBuilder> for NgramData {
     fn from(value: NgramDataBuilder) -> Self {
         value.build()
+    }
+}
+
+/// Accumulator of data in the final dataset layout
+///
+/// All fields have the same meaning as in [`DatasetBlock`].
+#[derive(Debug, Default)]
+struct DatasetBlockBuilder {
+    case_class_ends: Vec<usize>,
+    ngram_str_ends: Vec<usize>,
+    ngrams: String,
+    ngram_data_ends: Vec<usize>,
+    years: Vec<Year>,
+    match_counts: Vec<YearMatchCount>,
+    volume_counts: Vec<YearVolumeCount>,
+}
+//
+impl DatasetBlockBuilder {
+    /// Create a new dataset block
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a new case equivalence class to the block
+    pub fn new_case_class(&mut self) -> CaseClassBuilder<'_> {
+        CaseClassBuilder(self)
+    }
+
+    /// Build the final dataset block
+    pub fn build(self) -> DatasetBlock {
+        DatasetBlock {
+            case_class_ends: self.case_class_ends.into(),
+            ngram_str_ends: self.ngram_str_ends.into(),
+            ngrams: self.ngrams.into(),
+            ngram_data_ends: self.ngram_data_ends.into(),
+            years: self.years.into(),
+            match_counts: self.match_counts.into(),
+            volume_counts: self.volume_counts.into(),
+        }
+    }
+}
+//
+impl From<DatasetBlockBuilder> for DatasetBlock {
+    fn from(value: DatasetBlockBuilder) -> Self {
+        value.build()
+    }
+}
+//
+/// Proxy object used to insert a new case equivalence class in a dataset block
+#[derive(Debug)]
+struct CaseClassBuilder<'block>(&'block mut DatasetBlockBuilder);
+//
+impl CaseClassBuilder<'_> {
+    /// Add a case-equivalent ngram to this case equivalence class
+    ///
+    /// Ngrams should be added in order of decreasing popularity, and yearly
+    /// data should be specified in order of decreasing data.
+    fn push(&mut self, ngram: &str, year_data: impl IntoIterator<Item = YearData>) {
+        self.0.ngrams.push_str(ngram);
+        self.0.ngram_str_ends.push(self.0.ngrams.len());
+        for YearData {
+            year,
+            match_count,
+            volume_count,
+        } in year_data
+        {
+            self.0.years.push(year);
+            self.0.match_counts.push(match_count);
+            self.0.volume_counts.push(volume_count);
+        }
+        self.0.ngram_data_ends.push(self.0.volume_counts.len());
+    }
+}
+//
+impl Drop for CaseClassBuilder<'_> {
+    fn drop(&mut self) {
+        self.0.case_class_ends.push(self.0.ngram_data_ends.len());
     }
 }
