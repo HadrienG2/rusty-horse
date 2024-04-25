@@ -1,6 +1,7 @@
 //! Processing pipeline configuration
 
 use crate::{languages::LanguageInfo, Args, Year};
+use serde::{Deserialize, Serialize};
 use std::{
     num::{NonZeroU64, NonZeroUsize},
     sync::Arc,
@@ -11,7 +12,7 @@ use std::{
 /// This is the result of combining digested [`Args`] with language-specific
 /// considerations. Please refer to [`Args`] to know more about common fields.
 #[allow(missing_docs)]
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Config {
     /// Truth that capitalized words should be removed from the dataset
     pub strip_capitalized: bool,

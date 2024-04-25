@@ -6,6 +6,7 @@
 //!   when some user cutoff is reached.
 
 pub mod builder;
+pub mod cache;
 
 use crate::{Year, YearData, YearMatchCount, YearVolumeCount};
 
