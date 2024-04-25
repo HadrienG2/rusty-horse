@@ -53,16 +53,17 @@ impl FileStatsBuilder {
     pub fn add_entry(&mut self, entry: Entry) {
         // If the entry is associated with the current ngram, merge it into the
         // current ngram's statistics
+        let data = entry.data();
         if let Some((ngram, stats)) = &mut self.current_ngram_and_stats {
             if *ngram == entry.ngram {
-                stats.add_year(entry.data);
+                stats.add_year(data);
                 return;
             }
         }
 
         // Otherwise, flush the current ngram statistics and make the current
         // entry the new current ngram
-        self.switch_ngram(Some((entry.ngram, NgramStats::from(entry.data))));
+        self.switch_ngram(Some((entry.ngram, NgramStats::from(data))));
     }
 
     /// Export final statistics at end of dataset processing

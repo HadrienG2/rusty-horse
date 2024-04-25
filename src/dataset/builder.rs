@@ -11,7 +11,7 @@ use crate::{
 use rayon::prelude::*;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{hash_map, BTreeMap, BinaryHeap, HashMap, VecDeque},
+    collections::{hash_map, HashMap, VecDeque},
     sync::Arc,
 };
 use unicase::UniCase;
@@ -50,16 +50,17 @@ impl DatasetBuilder {
     pub fn add_entry(&mut self, entry: Entry) {
         // If the entry is associated with the current ngram, merge it into the
         // current ngram's statistics
+        let entry_data = entry.data();
         if let Some((ngram, data)) = &mut self.current_ngram_and_data {
             if *ngram == entry.ngram {
-                data.add_year(entry.data);
+                data.add_year(entry_data);
                 return;
             }
         }
 
         // Otherwise, flush the current ngram data and make the current entry
         // the new current ngram
-        self.switch_ngram(Some((entry.ngram, NgramDataBuilder::from(entry.data))));
+        self.switch_ngram(Some((entry.ngram, NgramDataBuilder::from(entry_data))));
     }
 
     /// Export the file dataset
@@ -132,6 +133,7 @@ impl From<DatasetBuilder> for DatasetFiles {
 /// Produced from [`DatasetBuilder`] once done accumulating data about a single
 /// input file. Can be used to aggregate data from other input data files, then
 /// turned into a [`Dataset`] once done.
+#[derive(Debug)]
 pub struct DatasetFiles {
     /// Data collection configuration
     config: Arc<Config>,

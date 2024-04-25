@@ -1,7 +1,7 @@
 //! Processing of an individual data file
 
 use crate::{
-    config::Config, progress::ProgressReport, stats::{FileStats, FileStatsBuilder}, Ngram, Result, Year, YearMatchCount, YearVolumeCount
+    config::Config, dataset::builder::DatasetBuilder, progress::ProgressReport, stats::{FileStats, FileStatsBuilder}, Ngram, Result, Year, YearMatchCount, YearVolumeCount
 };
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipDecoder;
@@ -90,11 +90,14 @@ pub async fn download_and_process(
     let mut early_filter = make_early_filter(config.clone());
     let mut entries = entries.try_filter(move |entry| future::ready(early_filter(entry)));
 
-    // Accumulate statistics from TSV entries
-    let mut stats = FileStatsBuilder::new(config.clone());
+    // Accumulate data from TSV entries
+    let mut dataset = DatasetBuilder::new(config.clone());
+    let mut stats = FileStatsBuilder::new(config);
     let context = || format!("fetching and processing {url}");
     while let Some(entry) = entries.next().await {
-        stats.add_entry(entry.with_context(context)?);
+        let entry = entry.with_context(context)?;
+        dataset.add_entry(entry.clone());
+        stats.add_entry(entry);
     }
     Ok(stats.finish_file())
 }
@@ -105,9 +108,28 @@ pub struct Entry {
     /// (Case-sensitive) ngram whose frequency is being studied
     pub ngram: Ngram,
 
-    /// Yearly data from this ngram
-    #[serde(flatten)]
-    pub data: YearData,
+    // FIXME: In my ideal world, this would be #[serde(flatten)] YearData, but
+    //        the csv + serde combination rejects this for unknown reasons.
+    //
+    /// Year on which the data was recorded
+    year: Year,
+
+    /// Number of recorded occurences
+    match_count: YearMatchCount,
+
+    /// Number of books across which occurences were recorded
+    volume_count: YearVolumeCount,
+}
+//
+impl Entry {
+    /// Yearly data subset of this entry
+    pub fn data(&self) -> YearData {
+        YearData {
+            year: self.year,
+            match_count: self.match_count,
+            volume_count: self.volume_count,
+        }
+    }
 }
 
 /// Yearly data subset of a dataset entry
@@ -121,6 +143,7 @@ pub struct YearData {
 
     /// Number of books across which occurences were recorded
     pub volume_count: YearVolumeCount,
+    
 }
 
 /// Build the early entry filter
@@ -148,7 +171,7 @@ pub fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bool {
         }
 
         // Determine if an entry should be rejected
-        let rejection = if entry.data.year < config.min_year {
+        let rejection = if entry.data().year < config.min_year {
             Some(RejectCause::Old)
         } else if config.strip_capitalized
             && entry
