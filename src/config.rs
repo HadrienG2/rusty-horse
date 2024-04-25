@@ -31,7 +31,7 @@ impl Config {
         let storage_chunk = args.storage_chunk();
         let Args {
             language: _,
-            strip_odd_capitalized,
+            strip_capitalized,
             min_year: _,
             min_matches,
             min_books,
@@ -41,7 +41,7 @@ impl Config {
             sort_by_popularity,
         } = args;
         Arc::new(Self {
-            strip_capitalized: strip_odd_capitalized && language.should_strip_capitalized,
+            strip_capitalized: strip_capitalized.unwrap_or(language.should_strip_capitalized),
             min_year,
             min_matches,
             min_books,

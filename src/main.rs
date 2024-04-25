@@ -20,6 +20,7 @@ use std::num::{NonZeroU64, NonZeroU32, NonZeroUsize};
 /// All occurence count cutoffs are applied to the occurence count of a single
 /// ngram (before case equivalence), over the time period of interest.
 #[derive(Parser, Debug)]
+#[command(version, author)]
 struct Args {
     /// Short name of the Google Books Ngram language to be used, e.g.
     /// "eng-fiction"
@@ -30,14 +31,18 @@ struct Args {
 
     // TODO: "Bad word" exclusion mechanism
     //
-    /// Strip capitalized words, if it makes sense for the target language
+    /// Ignore capitalized words from the source dataset
     ///
     /// In most languages from the Google Books dataset, ngrams that start with
-    /// a capital letter tend to be an odd passphrase building block. But this
-    /// is not always true, one exception being German. By default, we ignore
-    /// capitalized words for every language where it makes sense to do so.
-    #[arg(long, default_value_t = true)]
-    strip_odd_capitalized: bool,
+    /// a capital letter tend to be an odd passphrase building block (proper
+    /// noun, acronym, and other less-memorable stuff). However this is not
+    /// always true, the most obvious exception being German where all common
+    /// nouns start with a capital letter.
+    ///
+    /// By default, we ignore capitalized words for every language where it
+    /// makes sense to do so.
+    #[arg(long)]
+    strip_capitalized: Option<bool>,
 
     /// Minimum accepted book publication year
     ///
@@ -85,7 +90,7 @@ struct Args {
 
     /// On-disk dataset chunk size
     ///
-    /// This is the granularity at which dataset entries are written to or
+    /// This is the granularity with which dataset entries are written to or
     /// loaded from storage. It will be rounded up to the next multiple of the
     /// in-memory chunk size.
     //
