@@ -83,9 +83,7 @@ struct Args {
     /// constant overheads for spawning parallel/asynchronous tasks will not be
     /// properly amortized. But if it is set too high, parallel load balancing
     /// will be less effective and CPU caches will be used less efficiently.
-    //
-    // FIXME: Tune this to sensible defaults
-    #[arg(long, default_value = "1024")]
+    #[arg(long, default_value = "1000")]
     memory_chunk: NonZeroUsize,
 
     /// On-disk dataset chunk size
