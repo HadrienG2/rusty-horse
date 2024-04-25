@@ -19,7 +19,7 @@ pub fn pick_top_ngrams<'dataset>(
 ) -> Vec<&'dataset str> {
     // Map each case equivalence class into a tuple of global statistics over
     // all ngrams + most common ngrams, or discard the case equivalence class
-    let stats_and_ngrams = (dataset.blocks().par_iter()).flat_map(|block| {
+    let rev_stats_and_ngrams = (dataset.blocks().par_iter()).flat_map(|block| {
         (block.case_classes())
             .filter_map(|class| case_class_filter_map(config, class))
             .collect::<Vec<_>>()
@@ -31,27 +31,27 @@ pub fn pick_top_ngrams<'dataset>(
         config.sort_by_popularity,
     ) {
         // If there is no sorting and no limit, just dump the ngrams as-is
-        (None, false) => stats_and_ngrams.map(|(_stats, ngram)| ngram).collect(),
+        (None, false) => rev_stats_and_ngrams.map(|(_stats, ngram)| ngram).collect(),
 
         // If there is sorting without a limit on the output size, sort the
         // ngrams then dump them
         (None, true) => {
-            let mut sorted = stats_and_ngrams.collect::<Vec<_>>();
-            sorted.par_sort_unstable_by_key(|(stats, _ngram)| *stats);
+            let mut sorted = rev_stats_and_ngrams.collect::<Vec<_>>();
+            sorted.par_sort_unstable_by_key(|(rev_stats, _ngram)| *rev_stats);
             (sorted.into_par_iter())
-                .map(|(_stats, ngram)| ngram)
+                .map(|(_rev_stats, ngram)| ngram)
                 .collect()
         }
 
         // If there is a limit, then...
         (Some(max_len), sort) => {
             // Find the top ngrams up to this limit
-            let mut top_stats_and_ngrams = stats_and_ngrams
+            let mut top_stats_and_ngrams = rev_stats_and_ngrams
                 // First determine top ngrams on each thread using a min-heap...
                 .fold(
                     || BinaryHeap::with_capacity(max_len),
-                    |mut heap, (stats, ngram)| {
-                        heap.push((Reverse(stats), ngram));
+                    |mut heap, (rev_stats, ngram)| {
+                        heap.push((rev_stats, ngram));
                         if heap.len() > max_len {
                             heap.pop();
                         }
@@ -98,7 +98,7 @@ pub fn pick_top_ngrams<'dataset>(
 fn case_class_filter_map<'dataset>(
     config: &Config,
     class: CaseClassView<'dataset>,
-) -> Option<(NgramStats, &'dataset str)> {
+) -> Option<(Reverse<NgramStats>, &'dataset str)> {
     let mut case_stats: Option<(NgramStats, &str, NgramStats)> = None;
     'casings: for casing in class.ngrams() {
         // Ignore capitalized ngrams if configured to do so
@@ -146,5 +146,6 @@ fn case_class_filter_map<'dataset>(
             case_stats = Some((ngram_stats, casing.ngram(), ngram_stats));
         }
     }
-    case_stats.map(|(total_stats, top_ngram, _top_stats)| (total_stats, top_ngram))
+    // Prepare for sorting by descending statistics
+    case_stats.map(|(total_stats, top_ngram, _top_stats)| (Reverse(total_stats), top_ngram))
 }
