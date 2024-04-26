@@ -4,26 +4,41 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Multi-purpose utilities
 anyhow = "1.0.81"
-arrow = { version = "51.0.0", default-features = false }
-async-compression = { version = "0.4.6", features = ["tokio", "gzip"] }
-clap = { version = "4.5.3", features = ["derive", "wrap_help"] }
-csv-async = { version = "1.3.0", features = ["tokio"] }
-dialoguer = { version = "0.11.0", default-features = false, features = ["fuzzy-select"] }
-directories = "5.0.1"
-futures = "0.3.30"
-indicatif = "0.17.8"
-log = "0.4.21"
-parquet = { version = "51.0.0", features = ["tokio", "arrow", "async", "zstd", "lz4"], default-features = false }
 rayon = "1.10.0"
-reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls", "stream"] }
 serde = { version = "1.0.197", features = ["derive"] }
-serde_json = "1.0.116"
+
+# CLI
+clap = { version = "4.5.3", features = ["derive", "wrap_help"] }
+dialoguer = { version = "0.11.0", default-features = false, features = ["fuzzy-select"] }
+indicatif = "0.17.8"
+
+# Logging to syslog
+log = "0.4.21"
 syslog = "6.1.0"
+
+# Asynchronous I/O
+futures = { version = "0.3.30", default-features = false, features = ["async-await", "std"] }
 tokio = { version = "1.36.0", features = ["fs", "io-std", "macros", "rt-multi-thread"] }
 tokio-util = { version = "0.7.10", features = ["io"] }
+
+# Initial dataset building from the gzipped TSV files at google
+async-compression = { version = "0.4.6", features = ["gzip", "tokio"] }
+csv-async = { version = "1.3.0", features = ["tokio"] }
+reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls", "stream"] }
 unicase = "2.7.0"
+
+# Fast dataset disk cache for everyday executions
+arrow = { version = "51.0.0", default-features = false }
+directories = "5.0.1"
+parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "lz4", "tokio", "zstd"] }
+serde_json = "1.0.116"
 
 [features]
 # Enable trace logging level for extra debugging verbosity
+#
+# In this mode, the fate of every single entry of the TSV files is explained.
+# Needless to say, this level of logging verbosity will greatly slow down
+# execution, which is why it is disabled by default.
 log-trace = []
