@@ -201,10 +201,10 @@ impl CacheConfig {
         let case_classes_path = root_path.join("case_classes.parquet").into();
         let case_classes_schema = Arc::new(Schema::new(vec![Field::new_map(
             "case_classes",
-            "ngram_to_data_end",
-            Field::new("ngrams", DataType::Utf8, false),
+            CASE_CLASSES_ENTRY,
+            Field::new(CASE_CLASSES_NGRAMS, DataType::Utf8, false),
             // FIXME: Figure out how to use non-nullable data here
-            Field::new("data_ends", DataType::UInt64, true),
+            Field::new(CASE_CLASSES_DATA_ENDS, DataType::UInt64, true),
             false,
             false,
         )]));
@@ -218,6 +218,11 @@ impl CacheConfig {
     }
 }
 
+// These column names must be kept in sync between the schema and the writer
+const CASE_CLASSES_ENTRY: &str = "ngram_to_data_end";
+const CASE_CLASSES_NGRAMS: &str = "ngrams";
+const CASE_CLASSES_DATA_ENDS: &str = "data_ends";
+
 /// Convert the dataset to RecordBatches at storage block granularity
 fn start_making_record_batches(
     config: Arc<Config>,
@@ -226,11 +231,13 @@ fn start_making_record_batches(
 ) -> (Receiver<RecordBatches>, JoinHandle<Result<()>>) {
     let (sender, receiver) = mpsc::channel(RECORD_BATCH_BUFFERING);
     let join_handle = tokio::task::spawn_blocking(move || {
+        // Determine problem dimensiosn
         let mem_chunks_per_storage_chunk = config.mem_chunks_per_storage_chunk.get();
         let case_classes_per_storage_chunk =
             mem_chunks_per_storage_chunk * config.memory_chunk.get();
-        let mut year_data_len = 0;
+
         // For each storage chunk in the dataset...
+        let mut year_data_len = 0;
         for storage_chunk in dataset
             .blocks()
             .chunks(config.mem_chunks_per_storage_chunk.get())
@@ -247,9 +254,9 @@ fn start_making_record_batches(
                 .sum();
             let mut case_classes = MapBuilder::with_capacity(
                 Some(MapFieldNames {
-                    entry: "ngram_to_data_end".into(),
-                    key: "ngrams".into(),
-                    value: "data_ends".into(),
+                    entry: CASE_CLASSES_ENTRY.into(),
+                    key: CASE_CLASSES_NGRAMS.into(),
+                    value: CASE_CLASSES_DATA_ENDS.into(),
                 }),
                 StringBuilder::with_capacity(num_ngrams, num_ngram_str_bytes),
                 UInt64Builder::with_capacity(num_ngrams),
