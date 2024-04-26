@@ -27,9 +27,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    fs::{self, File},
-    sync::mpsc::{self, Receiver},
-    task::JoinHandle,
+    fs::{self, File}, process::Command, sync::mpsc::{self, Receiver}, task::JoinHandle
 };
 
 /// Number of RecordBatches that can be queued before the thread that generates
@@ -42,15 +40,14 @@ pub async fn save(
     dataset: Arc<Dataset>,
     report: ProgressReport,
 ) -> Result<()> {
-    // Look up where the cache should be saved
-    //
-    // FIXME: Don't write there directly, instead write to a temp directory,
-    //        then replace existing cache with rm+mv
-    // FIXME: Should use one distinct cache per language => lang subdirectory
-    let cache_dir = cache_dir().context("looking up the cache save location")?;
+    // Set up the application's cache directory & find language cache location
+    let cache_dir = cache_dir(&config.language_name).context("looking up the language cache's location")?;
+
+    // Use a temporary directory while in the process of saving the cache
+    let temp_dir = tempfile::tempdir().context("creating a temporary directory for the cache")?;
 
     // Save the app configuration that the cache was created with
-    let config_path = cache_dir.join("config.json");
+    let config_path = temp_dir.path().join("config.json");
     let config_json =
         serde_json::to_vec_pretty(&*config).context("converting app configuration to JSON")?;
     fs::write(config_path, &config_json)
@@ -73,8 +70,8 @@ pub async fn save(
     //   classes, with pointers to the associated yearly data rows in year_data.
     let apply_common_properties_and_build = |builder: WriterPropertiesBuilder| {
         builder
-            .set_compression(Compression::LZ4_RAW)
             .set_writer_version(WriterVersion::PARQUET_2_0)
+            .set_compression(Compression::LZ4_RAW)
             .build()
     };
     //
@@ -85,7 +82,7 @@ pub async fn save(
         Field::new("volume_counts", DataType::UInt32, true),
     ]));
     let mut year_data_writer = AsyncArrowWriter::try_new(
-        File::create(cache_dir.join("year_data.parquet"))
+        File::create(temp_dir.path().join("year_data.parquet"))
             .await
             .context("creating the yearly data file")?,
         year_data_schema.clone(),
@@ -108,7 +105,7 @@ pub async fn save(
         false,
     )]));
     let mut case_classes_writer = AsyncArrowWriter::try_new(
-        File::create(cache_dir.join("case_classes.parquet"))
+        File::create(temp_dir.path().join("case_classes.parquet"))
             .await
             .context("creating the case classes file")?,
         case_classes_schema.clone(),
@@ -128,7 +125,7 @@ pub async fn save(
         .len()
         .div_ceil(mem_chunks_per_storage_chunk);
     let save = report.add(
-        "Building cache",
+        "Saving data cache",
         ProgressConfig::new(Work::PercentSteps(num_storage_chunks)),
     );
     let mut reset_time = Instant::now();
@@ -155,7 +152,7 @@ pub async fn save(
         }
     }
 
-    // Finish writing the cache files (FIXME: Implement atomicity here)
+    // Finish writing the cache
     futures::try_join!(
         batch_maker_join.map(|e| e.context("joining the batch-making thread")?),
         year_data_writer
@@ -165,6 +162,16 @@ pub async fn save(
             .close()
             .map(|e| e.context("closing the case classes file")),
     )?;
+
+    // Move the successfully saved cache to its final location
+    if cache_dir.exists() {
+        tokio::fs::remove_dir_all(&cache_dir).await.context("deleting old version of the cache")?;
+    }
+    let temp_dir = temp_dir.into_path();
+    let status = Command::new("mv").arg(temp_dir).arg(&*cache_dir).status().await.context("moving cache to its final location")?;
+    if !status.success() {
+        anyhow::bail!("failed to move cache to its final location with {status}");
+    }
     Ok(())
 }
 
@@ -264,11 +271,12 @@ struct RecordBatches {
     case_classes: RecordBatch,
 }
 
-/// Create the cache directory if it doesn't exist, and return its location
-fn cache_dir() -> Result<Box<Path>> {
+/// Create the cache directory if it doesn't exist, and return the location of
+/// its subdirectory for a certain language of interest
+fn cache_dir(language_name: &str) -> Result<Box<Path>> {
     let dirs = ProjectDirs::from("", "", env!("CARGO_PKG_NAME"))
         .context("determining the cache's location")?;
     let cache_dir = dirs.cache_dir();
     std::fs::create_dir_all(cache_dir).context("setting up the cache directory")?;
-    Ok(cache_dir.into())
+    Ok(cache_dir.join(language_name).into_boxed_path())
 }

@@ -12,10 +12,15 @@ use std::{
 /// This is the result of combining digested [`Args`] with language-specific
 /// considerations. Please refer to [`Args`] to know more about common fields.
 #[allow(missing_docs)]
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Config {
+    /// Short name of the language in use
+    pub language_name: Box<str>,
+
     /// Truth that capitalized words should be removed from the dataset
     pub strip_capitalized: bool,
+
+    // Other fields have the same meaning as in Args
     pub min_year: Year,
     pub min_matches: NonZeroU64,
     pub min_books: NonZeroU64,
@@ -42,6 +47,7 @@ impl Config {
             sort_by_popularity,
         } = args;
         Arc::new(Self {
+            language_name: language.short_name.into(),
             strip_capitalized: strip_capitalized.unwrap_or(language.should_strip_capitalized),
             min_year,
             min_matches,
