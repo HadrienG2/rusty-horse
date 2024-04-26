@@ -41,9 +41,11 @@ impl ProgressReport {
             (Work::Steps(_), false) => "{pos}/{len}",
             (Work::Steps(_), true) => "{pos}/{len} ({per_sec})",
             (Work::PercentSteps(_), false) => "{percent:>2}%",
-            (Work::PercentSteps(_), true) => "{percent:>2}% (~{eta_precise} left)",
-            (Work::Bytes(_), false) => "{bytes}/{total_bytes}",
-            (Work::Bytes(_), true) => "{bytes}/{total_bytes} ({bytes_per_sec})",
+            (Work::PercentSteps(_), true) => "{percent:>2}% (~{eta} left)",
+            (Work::Bytes(_), false) => "{decimal_bytes}/{decimal_total_bytes}",
+            (Work::Bytes(_), true) => {
+                "{decimal_bytes}/{decimal_total_bytes} ({decimal_bytes_per_sec})"
+            }
         };
         bar = bar.with_style(
             ProgressStyle::with_template(&format!("{style_header}{style_trailer}"))

@@ -16,6 +16,8 @@ use clap::Parser;
 use log::LevelFilter;
 use serde::Deserialize;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 /// TODO: User-visible program description
@@ -259,3 +261,8 @@ fn setup_logging() -> syslog::Result<()> {
         None,
     )
 }
+
+/// Use jemalloc for improved multi-thread performance
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;

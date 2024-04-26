@@ -203,9 +203,17 @@ impl DatasetFiles {
             })
             .collect::<_>();
 
-        // Parallelize the liberation of the original data and offload it to a
-        // background thread, as this is a surprisingly expensive operation!
-        std::thread::spawn(move || case_classes.into_par_iter().for_each(std::mem::drop));
+        // Offload the liberation of the original data to a background thread,
+        // as this is a surprisingly expensive operation!
+        let drop = report.add(
+            "Collecting garbage",
+            ProgressConfig::new(Work::PercentSteps(case_classes.len())),
+        );
+        std::thread::spawn(move || {
+            case_classes.into_iter().for_each(|_| {
+                drop.make_progress(1);
+            })
+        });
         Arc::new(Dataset(dataset_blocks))
     }
 }

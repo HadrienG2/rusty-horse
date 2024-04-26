@@ -35,6 +35,9 @@ directories = "5.0.1"
 parquet = { version = "51.0.0", default-features = false, features = ["arrow", "async", "lz4", "tokio", "zstd"] }
 serde_json = "1.0.116"
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = { version = "0.5", features = ["background_threads"] }
+
 [features]
 # Enable trace logging level for extra debugging verbosity
 #
