@@ -14,8 +14,8 @@ use arrow::{
     },
     datatypes::{DataType, Field, Schema},
 };
-use futures::FutureExt;
 use directories::ProjectDirs;
+use futures::FutureExt;
 use parquet::{
     arrow::AsyncArrowWriter,
     basic::{Compression, Encoding},
@@ -26,7 +26,11 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{fs::{self, File}, sync::mpsc::{self, Receiver}, task::JoinHandle};
+use tokio::{
+    fs::{self, File},
+    sync::mpsc::{self, Receiver},
+    task::JoinHandle,
+};
 
 /// Number of RecordBatches that can be queued before the thread that generates
 /// them is interrupted
@@ -89,7 +93,7 @@ pub async fn save(
             WriterProperties::builder()
                 .set_column_encoding("years".into(), Encoding::DELTA_BINARY_PACKED)
                 .set_column_encoding("match_counts".into(), Encoding::PLAIN)
-                .set_column_encoding("volume_counts".into(), Encoding::PLAIN)
+                .set_column_encoding("volume_counts".into(), Encoding::PLAIN),
         )),
     )
     .context("preparing to write down yearly data")?;
@@ -109,11 +113,10 @@ pub async fn save(
             .context("creating the case classes file")?,
         case_classes_schema.clone(),
         Some(apply_common_properties_and_build(
-            WriterProperties::builder()
-                .set_column_encoding(
-                    "case_classes.ngram_to_data_end.data_ends".into(),
-                    Encoding::DELTA_BINARY_PACKED,
-                )
+            WriterProperties::builder().set_column_encoding(
+                "case_classes.ngram_to_data_end.data_ends".into(),
+                Encoding::DELTA_BINARY_PACKED,
+            ),
         )),
     )
     .context("preparing to write down case classes")?;
@@ -131,7 +134,8 @@ pub async fn save(
     let mut reset_time = Instant::now();
 
     // Save the dataset using the user-requested chunk size
-    let (mut batches, batch_maker_join) = start_making_record_batches(config, dataset, year_data_schema, case_classes_schema);
+    let (mut batches, batch_maker_join) =
+        start_making_record_batches(config, dataset, year_data_schema, case_classes_schema);
     while let Some(batches) = batches.recv().await {
         // Submit the writes to parquet
         let year_data_write = year_data_writer.write(&batches.year_data);
@@ -154,8 +158,12 @@ pub async fn save(
     // Finish writing the cache files (FIXME: Implement atomicity here)
     futures::try_join!(
         batch_maker_join.map(|e| e.context("joining the batch-making thread")?),
-        year_data_writer.close().map(|e| e.context("closing the yearly data file")),
-        case_classes_writer.close().map(|e| e.context("closing the case classes file")),
+        year_data_writer
+            .close()
+            .map(|e| e.context("closing the yearly data file")),
+        case_classes_writer
+            .close()
+            .map(|e| e.context("closing the case classes file")),
     )?;
     Ok(())
 }
@@ -170,8 +178,10 @@ fn start_making_record_batches(
     let (sender, receiver) = mpsc::channel(RECORD_BATCH_BUFFERING);
     let join_handle = tokio::task::spawn_blocking(move || {
         let mem_chunks_per_storage_chunk = config.mem_chunks_per_storage_chunk.get();
-        let case_classes_per_storage_chunk = mem_chunks_per_storage_chunk * config.memory_chunk.get();
+        let case_classes_per_storage_chunk =
+            mem_chunks_per_storage_chunk * config.memory_chunk.get();
         let mut year_data_len = 0;
+        // For each storage chunk in the dataset...
         for storage_chunk in dataset
             .blocks()
             .chunks(config.mem_chunks_per_storage_chunk.get())
@@ -220,7 +230,8 @@ fn start_making_record_batches(
                 }
             }
 
-            // Convert the collected data into RecordBatches and start writing them
+            // Convert the collected data into RecordBatches and submit them to
+            // the I/O thread for writing to disk
             let year_data = RecordBatch::try_new(
                 year_data_schema.clone(),
                 vec![
@@ -236,10 +247,12 @@ fn start_making_record_batches(
                 vec![Arc::new(case_classes.finish()) as ArrayRef],
             )
             .context("creating a case classes data batch")?;
-            sender.blocking_send(RecordBatches {
-                year_data,
-                case_classes,
-            }).context("sending data to the I/O thread")?;
+            sender
+                .blocking_send(RecordBatches {
+                    year_data,
+                    case_classes,
+                })
+                .context("sending data to the I/O thread")?;
         }
         Ok(())
     });
