@@ -1,8 +1,13 @@
 //! Processing of an individual gzipped TSV data file from Google
 
 use crate::{
-    YearData,
-    config::Config, dataset::{builder::{DatasetBuilder, DatasetFiles}, Dataset}, progress::ProgressReport, Ngram, Result, Year, YearMatchCount, YearVolumeCount
+    config::Config,
+    dataset::{
+        builder::{DatasetBuilder, DatasetFiles},
+        Dataset,
+    },
+    progress::{ProgressConfig, ProgressReport, ProgressTracker, Work},
+    Ngram, Result, Year, YearData, YearMatchCount, YearVolumeCount,
 };
 use anyhow::Context;
 use async_compression::tokio::bufread::GzipDecoder;
@@ -21,28 +26,38 @@ use tokio_util::io::StreamReader;
 pub async fn download_and_collect(
     config: Arc<Config>,
     client: reqwest::Client,
-    urls: impl IntoIterator<Item = Box<str>>,
-    report: Arc<ProgressReport>,
+    urls: Vec<Box<str>>,
+    report: &ProgressReport,
 ) -> Result<Arc<Dataset>> {
-    // Start downloading and processing all the files
+    // Track file downloads
+    let num_files = urls.len();
+    let downloads = report.add(
+        "Initiating data downloads",
+        ProgressConfig::new(Work::Steps(num_files)).dont_show_rate_eta(),
+    );
+    let bytes = report.add(
+        "Downloading and extracting data",
+        ProgressConfig::new(Work::Bytes(0)).allow_adding_work(),
+    );
+
+    // Start file downloads
     let mut data_files = JoinSet::new();
     for url in urls {
         data_files.spawn(download_and_extract(
             config.clone(),
             client.clone(),
             url,
-            report.clone(),
+            downloads.clone(),
+            bytes.clone(),
         ));
     }
 
     // Collect and merge statistics from data files as downloads finish
     let mut dataset = DatasetFiles::new(config);
     while let Some(file_data) = data_files.join_next().await {
-        dataset.merge(
-            file_data.context("collecting results from one data file")??
-        )
+        dataset.merge(file_data.context("collecting results from one data file")??)
     }
-    Ok(dataset.finish())
+    Ok(dataset.finish(report))
 }
 
 /// Download a data file and extract the data inside
@@ -50,7 +65,8 @@ pub async fn download_and_extract(
     config: Arc<Config>,
     client: reqwest::Client,
     url: Box<str>,
-    report: Arc<ProgressReport>,
+    downloads: ProgressTracker,
+    bytes: ProgressTracker,
 ) -> Result<DatasetFiles> {
     // Start the download
     let context = || format!("initiating download of {url}");
@@ -60,13 +76,18 @@ pub async fn download_and_extract(
         .await
         .and_then(Response::error_for_status)
         .with_context(context)?;
-    report.start_download(response.content_length().with_context(context)?);
+    bytes.add_work(response.content_length().with_context(context)?);
+    if downloads.make_progress(1) {
+        bytes.done_adding_work();
+    }
 
     // Slice the download into chunks of bytes
     let gz_bytes = StreamReader::new(response.bytes_stream().map(move |res| {
         res
             // Track how many input bytes have been downloaded so far
-            .inspect(|bytes_block| report.inc_bytes(bytes_block.len()))
+            .inspect(|bytes_block| {
+                bytes.make_progress(bytes_block.len() as u64);
+            })
             // Translate reqwest errors into I/O errors
             .map_err(|e| io::Error::new(ErrorKind::Other, Box::new(e)))
     }));
@@ -219,7 +240,9 @@ pub fn normalizing_filter_map(ngram: Ngram) -> Option<Ngram> {
         Ok(wo_tags) => wo_tags,
         Err(non_word) => {
             log_rejection(&non_word, RejectCause::UnexpectedUnderscore);
-            log::trace!("Rejected ngram {non_word:?} because it uses underscores in an unexpected way");
+            log::trace!(
+                "Rejected ngram {non_word:?} because it uses underscores in an unexpected way"
+            );
             return None;
         }
     };
@@ -231,8 +254,6 @@ pub fn normalizing_filter_map(ngram: Ngram) -> Option<Ngram> {
     }
     Some(ngram)
 }
-
-
 
 /// Remove well-formed grammar tags from an ngram, reject any other
 /// underscore-based pattern which suggests we're dealing with a non-word entity
@@ -249,7 +270,7 @@ fn remove_grammar_tags(mut ngram: Ngram) -> Result<Ngram, Ngram> {
             } else if idx >= 1 && c == '_' {
                 // ...and an optional terminating underscore
                 remainder = if idx + 1 < after.len() {
-                    &after[idx+1..]
+                    &after[idx + 1..]
                 } else {
                     ""
                 };

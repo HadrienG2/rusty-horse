@@ -4,6 +4,7 @@ use super::{Dataset, DatasetBlock};
 use crate::{
     add_nz_u64,
     config::Config,
+    progress::{ProgressConfig, ProgressReport, Work},
     stats::NgramStats,
     tsv::{self, Entry},
     Ngram, Year, YearData, YearMatchCount, YearVolumeCount,
@@ -162,8 +163,12 @@ impl DatasetFiles {
     }
 
     /// Convert the dataset to its final form
-    pub fn finish(self) -> Arc<Dataset> {
+    pub fn finish(self, report: &ProgressReport) -> Arc<Dataset> {
         // Order case equivalence classes by decreasing stats...
+        let sort = report.add(
+            "Sorting ngrams by usage",
+            ProgressConfig::new(Work::PercentSteps(self.data.len())),
+        );
         let mut case_classes = (self.data.into_par_iter())
             .map(|(_key, class)| {
                 // ...and within each class, order ngrams by decreasing stats
@@ -172,12 +177,17 @@ impl DatasetFiles {
                 let stats = class.stats;
                 let mut casings = class.casings.into_iter().collect::<Vec<_>>();
                 casings.sort_unstable_by_key(|(_ngram, data)| Reverse(data.stats));
+                sort.make_progress(1);
                 (stats, casings)
             })
             .collect::<Vec<_>>();
         case_classes.par_sort_unstable_by_key(|(stats, _casings)| Reverse(*stats));
 
         // Convert the ordered data into the final dataset layout
+        let build = report.add(
+            "Optimizing data layout",
+            ProgressConfig::new(Work::PercentSteps(case_classes.len())),
+        );
         let dataset_blocks = case_classes
             .par_chunks(self.config.memory_chunk.get())
             .map(|chunk| {
@@ -187,21 +197,16 @@ impl DatasetFiles {
                     for (ngram, data) in casings {
                         case_class.push(ngram, data.years.iter().copied())
                     }
+                    build.make_progress(1);
                 }
                 builder.build()
             })
             .collect::<_>();
 
-        // Parallelize and the liberation of the original data and offload it to
-        // a background thread, as this is a surprisingly expensive operation!
+        // Parallelize the liberation of the original data and offload it to a
+        // background thread, as this is a surprisingly expensive operation!
         std::thread::spawn(move || case_classes.into_par_iter().for_each(std::mem::drop));
         Arc::new(Dataset(dataset_blocks))
-    }
-}
-//
-impl From<DatasetFiles> for Arc<Dataset> {
-    fn from(value: DatasetFiles) -> Self {
-        value.finish()
     }
 }
 

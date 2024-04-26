@@ -3,6 +3,7 @@
 use crate::{
     config::Config,
     dataset::{CaseClassView, Dataset},
+    progress::{ProgressConfig, ProgressReport, Work},
     stats::NgramStats,
 };
 use rayon::prelude::*;
@@ -16,13 +17,20 @@ use std::{
 pub fn pick_top_ngrams<'dataset>(
     config: &Config,
     dataset: &'dataset Dataset,
+    report: &ProgressReport,
 ) -> Vec<&'dataset str> {
     // Map each case equivalence class into a tuple of global statistics over
     // all ngrams + most common ngrams, or discard the case equivalence class
+    let stats = report.add(
+        "Collecting usage statistics",
+        ProgressConfig::new(Work::PercentSteps(dataset.blocks().len())),
+    );
     let rev_stats_and_ngrams = (dataset.blocks().par_iter()).flat_map(|block| {
-        (block.case_classes())
+        let result = (block.case_classes())
             .filter_map(|class| case_class_filter_map(config, class))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        stats.make_progress(1);
+        result
     });
 
     // What happens next depends on the output configuration

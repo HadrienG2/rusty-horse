@@ -1,16 +1,29 @@
 //! Disk cache of the dataset
 
-use crate::{config::Config, Result};
+use super::Dataset;
+use crate::{
+    config::Config,
+    progress::{ProgressConfig, ProgressReport, Work},
+    Result,
+};
 use anyhow::Context;
-use arrow::{array::{ArrayRef, Int16Builder, LargeStringBuilder, MapBuilder, MapFieldNames, RecordBatch, UInt32Builder, UInt64Builder}, datatypes::{DataType, Field, Schema}};
+use arrow::{
+    array::{
+        ArrayRef, Int16Builder, MapBuilder, MapFieldNames, RecordBatch, StringBuilder, UInt32Builder, UInt64Builder
+    },
+    datatypes::{DataType, Field, Schema},
+};
 use directories::ProjectDirs;
 use parquet::{arrow::AsyncArrowWriter, file::properties::WriterProperties};
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::{Duration, Instant}};
 use tokio::fs::{self, File};
-use super::Dataset;
 
 /// Save the current configuration and dataset into the cache
-pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
+pub async fn save(
+    config: Arc<Config>,
+    dataset: Arc<Dataset>,
+    report: ProgressReport,
+) -> Result<()> {
     // Look up where the cache should be saved
     //
     // FIXME: Don't write there directly, instead write to a temp directory,
@@ -20,8 +33,11 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
 
     // Save the app configuration that the cache was created with
     let config_path = cache_dir.join("config.json");
-    let config_json = serde_json::to_vec_pretty(&*config).context("converting app configuration to JSON")?;
-    fs::write(config_path, &config_json).await.context("saving JSON app configuration to disk")?;
+    let config_json =
+        serde_json::to_vec_pretty(&*config).context("converting app configuration to JSON")?;
+    fs::write(config_path, &config_json)
+        .await
+        .context("saving JSON app configuration to disk")?;
 
     // In an ideal world, the dataset would be saved as one file in some sane
     // columnar data format.
@@ -38,11 +54,12 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
     // - "case_classes.parquet" contains ngrams, grouped by case equivalence
     //   classes, with pointers to the associated yearly data rows in year_data.
     // FIXME: Make compression level configurable from CLI
-    let writer_properties = WriterProperties::builder()/*.set_compression(
-        parquet::basic::Compression::ZSTD(
-            ZstdLevel::try_new(1).context("picking zstd compression level")?
-        )
-    )*/.build();
+    let writer_properties = WriterProperties::builder() /*.set_compression(
+            parquet::basic::Compression::ZSTD(
+                ZstdLevel::try_new(1).context("picking zstd compression level")?
+            )
+        )*/
+        .build();
     let year_data_schema = Arc::new(Schema::new(vec![
         // FIXME: Figure out how to use non-nullable data here
         Field::new("years", DataType::Int16, true),
@@ -50,30 +67,47 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
         Field::new("volume_counts", DataType::UInt32, true),
     ]));
     let mut year_data_writer = AsyncArrowWriter::try_new(
-        File::create(cache_dir.join("year_data.parquet")).await.context("creating the yearly data file")?,
+        File::create(cache_dir.join("year_data.parquet"))
+            .await
+            .context("creating the yearly data file")?,
         year_data_schema.clone(),
         Some(writer_properties.clone()),
-    ).context("preparing to write down case classes")?;
-    let case_classes_schema = Arc::new(Schema::new(vec![
-        Field::new_map(
-            "case_classes",
-            "ngram_to_data_end", 
-            Field::new("ngrams", DataType::LargeUtf8, false),
-            // FIXME: Figure out how to use non-nullable data here
-            Field::new("data_ends", DataType::UInt64, true),
-            false,
-            false,
-        )
-    ]));
+    )
+    .context("preparing to write down case classes")?;
+    let case_classes_schema = Arc::new(Schema::new(vec![Field::new_map(
+        "case_classes",
+        "ngram_to_data_end",
+        Field::new("ngrams", DataType::Utf8, false),
+        // FIXME: Figure out how to use non-nullable data here
+        Field::new("data_ends", DataType::UInt64, true),
+        false,
+        false,
+    )]));
     let mut case_classes_writer = AsyncArrowWriter::try_new(
-        File::create(cache_dir.join("case_classes.parquet")).await.context("creating the case classes file")?,
+        File::create(cache_dir.join("case_classes.parquet"))
+            .await
+            .context("creating the case classes file")?,
         case_classes_schema.clone(),
         Some(writer_properties.clone()),
-    ).context("preparing to write down case classes")?;
+    )
+    .context("preparing to write down case classes")?;
 
     // Save the dataset using the user-requested chunk size
+    // Set up progress reporting
+    let num_storage_chunks = dataset
+        .blocks()
+        .len()
+        .div_ceil(config.mem_chunks_per_storage_chunk.get());
+    let save = report.add(
+        "Saving ngrams to disk",
+        ProgressConfig::new(Work::PercentSteps(num_storage_chunks)),
+    );
+    let mut reset_time = Instant::now();
     let mut year_data_len = 0;
-    for storage_chunk in dataset.blocks().chunks(config.mem_chunks_per_storage_chunk.get()) {
+    for storage_chunk in dataset
+        .blocks()
+        .chunks(config.mem_chunks_per_storage_chunk.get())
+    {
         // Collect data from the current storage chunk
         let mut case_classes = MapBuilder::new(
             Some(MapFieldNames {
@@ -81,7 +115,7 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
                 key: "ngrams".into(),
                 value: "data_ends".into(),
             }),
-            LargeStringBuilder::new(),
+            StringBuilder::new(),
             UInt64Builder::new(),
         );
         let mut years = Int16Builder::new();
@@ -100,8 +134,18 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
                     ngrams.append_value(ngram_info.ngram());
                     data_ends.append_value(year_data_len);
                 }
-                case_classes.append(true).context("recording a case equivalence class")?;
+                case_classes
+                    .append(true)
+                    .context("recording a case equivalence class")?;
             }
+        }
+
+        // Track progress. ETA precision is quite bad on this operation so it is
+        // a good idea to periodically reset the estimate.
+        save.make_progress(1);
+        if reset_time.elapsed() > Duration::from_secs(2) {
+            save.reset_eta();
+            reset_time = Instant::now();
         }
 
         // Convert the collected data into RecordBatches and start writing them
@@ -113,30 +157,30 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
             vec![
                 Arc::new(years) as ArrayRef,
                 Arc::new(match_counts) as ArrayRef,
-                Arc::new(volume_counts) as ArrayRef
-            ]
-        ).context("creating a yearly data batch")?;
+                Arc::new(volume_counts) as ArrayRef,
+            ],
+        )
+        .context("creating a yearly data batch")?;
         let year_data_writer = year_data_writer.write(&year_data_batch);
         //
         let case_classes = case_classes.finish();
         let case_classes_batch = RecordBatch::try_new(
             case_classes_schema.clone(),
-            vec![Arc::new(case_classes) as ArrayRef]
-        ).context("creating a case classes data batch")?;
+            vec![Arc::new(case_classes) as ArrayRef],
+        )
+        .context("creating a case classes data batch")?;
         let case_classes_writer = case_classes_writer.write(&case_classes_batch);
 
         // Wait for both I/O operations and handle I/O errors
-        futures::try_join!(year_data_writer, case_classes_writer).context("submitting cache writes")?;
+        futures::try_join!(year_data_writer, case_classes_writer)
+            .context("submitting cache writes")?;
     }
 
     // Finish writing the cache files (FIXME: Implement atomicity here)
-    futures::try_join!(
-        year_data_writer.close(),
-        case_classes_writer.close()
-    ).context("closing cache files")?;
+    futures::try_join!(year_data_writer.close(), case_classes_writer.close())
+        .context("closing cache files")?;
     Ok(())
 }
-
 
 /// Create the cache directory if it doesn't exist, and return its location
 fn cache_dir() -> Result<Box<Path>> {

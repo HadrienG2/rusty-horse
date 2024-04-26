@@ -12,10 +12,10 @@ mod tsv;
 
 use crate::{config::Config, progress::ProgressReport};
 use anyhow::Context;
-use serde::Deserialize;
 use clap::Parser;
 use log::LevelFilter;
-use std::num::{NonZeroU64, NonZeroU32, NonZeroUsize};
+use serde::Deserialize;
+use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use tokio::io::{AsyncWriteExt, BufWriter};
 
 /// TODO: User-visible program description
@@ -99,7 +99,6 @@ struct Args {
     #[arg(long, default_value = "500")]
     storage_chunk: NonZeroUsize,
 
-
     /// Max number of output ngrams
     ///
     /// While it is possible to compute the full list of valid ngrams and trim
@@ -164,21 +163,28 @@ async fn main() -> Result<()> {
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
 
     // Set up progress reporting
-    let report = ProgressReport::new(dataset_urls.len());
+    let report = ProgressReport::new();
 
     // Collect the dataset (TODO: Try to use the cache here)
     let config = Config::new(args, language);
     let client = reqwest::Client::new();
-    let dataset =
-        tsv::download_and_collect(config.clone(), client, dataset_urls, report.clone())
-            .await?;
+    let dataset = tsv::download_and_collect(config.clone(), client, dataset_urls, &report).await?;
 
     // Start caching the dataset on disk (TODO: Don't do this if it comes from
     // the cache already)
-    let save_cache = tokio::spawn(dataset::cache::save(config.clone(), dataset.clone()));
+    let save_cache = tokio::spawn(dataset::cache::save(
+        config.clone(),
+        dataset.clone(),
+        report.clone(),
+    ));
 
     // Pick the most frequent ngrams across all data files
-    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset);
+    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset, &report);
+
+    // Wait until we're done saving the dataset to disk
+    save_cache.await.context("saving dataset to disk")??;
+
+    // Display the most frequent ngrams
     {
         let stdout = tokio::io::stdout();
         let mut stdout = BufWriter::new(stdout);
@@ -188,10 +194,6 @@ async fn main() -> Result<()> {
         }
         stdout.flush().await?;
     }
-
-    // ...then wait until we're done saving the cache to disk
-    eprintln!("Saving cache dataset to disk...");
-    save_cache.await.context("saving dataset to disk")??;
     Ok(())
 }
 
