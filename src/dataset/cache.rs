@@ -27,30 +27,34 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    fs::{self, File}, process::Command, sync::mpsc::{self, Receiver}, task::JoinHandle
+    fs::{self, File},
+    process::Command,
+    sync::mpsc::{self, Receiver},
+    task::JoinHandle,
 };
 
 /// Number of RecordBatches that can be queued before the thread that generates
 /// them is interrupted
 const RECORD_BATCH_BUFFERING: usize = 3;
 
-/// Save the current configuration and dataset into the cache
+/// Save the current configuration and dataset into the cache directory
 pub async fn save(
     config: Arc<Config>,
     dataset: Arc<Dataset>,
     report: ProgressReport,
 ) -> Result<()> {
     // Set up the application's cache directory & find language cache location
-    let cache_dir = cache_dir(&config.language_name).context("looking up the language cache's location")?;
+    let cache_dir =
+        cache_dir(&config.language_name).context("looking up the language cache's location")?;
 
     // Use a temporary directory while in the process of saving the cache
     let temp_dir = tempfile::tempdir().context("creating a temporary directory for the cache")?;
+    let cache_config = CacheConfig::new(temp_dir.path());
 
     // Save the app configuration that the cache was created with
-    let config_path = temp_dir.path().join("config.json");
     let config_json =
         serde_json::to_vec_pretty(&*config).context("converting app configuration to JSON")?;
-    fs::write(config_path, &config_json)
+    fs::write(&cache_config.config_path, &config_json)
         .await
         .context("saving JSON app configuration to disk")?;
 
@@ -74,18 +78,11 @@ pub async fn save(
             .set_compression(Compression::LZ4_RAW)
             .build()
     };
-    //
-    let year_data_schema = Arc::new(Schema::new(vec![
-        // FIXME: Figure out how to use non-nullable data here
-        Field::new("years", DataType::Int16, true),
-        Field::new("match_counts", DataType::UInt64, true),
-        Field::new("volume_counts", DataType::UInt32, true),
-    ]));
     let mut year_data_writer = AsyncArrowWriter::try_new(
-        File::create(temp_dir.path().join("year_data.parquet"))
+        File::create(&cache_config.year_data_path)
             .await
             .context("creating the yearly data file")?,
-        year_data_schema.clone(),
+        cache_config.year_data_schema.clone(),
         Some(apply_common_properties_and_build(
             WriterProperties::builder()
                 .set_column_encoding("years".into(), Encoding::DELTA_BINARY_PACKED)
@@ -94,21 +91,11 @@ pub async fn save(
         )),
     )
     .context("preparing to write down yearly data")?;
-    //
-    let case_classes_schema = Arc::new(Schema::new(vec![Field::new_map(
-        "case_classes",
-        "ngram_to_data_end",
-        Field::new("ngrams", DataType::Utf8, false),
-        // FIXME: Figure out how to use non-nullable data here
-        Field::new("data_ends", DataType::UInt64, true),
-        false,
-        false,
-    )]));
     let mut case_classes_writer = AsyncArrowWriter::try_new(
-        File::create(temp_dir.path().join("case_classes.parquet"))
+        File::create(&cache_config.case_classes_path)
             .await
             .context("creating the case classes file")?,
-        case_classes_schema.clone(),
+        cache_config.case_classes_schema.clone(),
         Some(apply_common_properties_and_build(
             WriterProperties::builder().set_column_encoding(
                 "case_classes.ngram_to_data_end.data_ends".into(),
@@ -132,7 +119,7 @@ pub async fn save(
 
     // Save the dataset using the user-requested chunk size
     let (mut batches, batch_maker_join) =
-        start_making_record_batches(config, dataset, year_data_schema, case_classes_schema);
+        start_making_record_batches(config, dataset, cache_config);
     while let Some(batches) = batches.recv().await {
         // Submit the writes to parquet
         let year_data_write = year_data_writer.write(&batches.year_data);
@@ -152,7 +139,7 @@ pub async fn save(
         }
     }
 
-    // Finish writing the cache
+    // Wait for the ongoing operations to finish
     futures::try_join!(
         batch_maker_join.map(|e| e.context("joining the batch-making thread")?),
         year_data_writer
@@ -165,22 +152,77 @@ pub async fn save(
 
     // Move the successfully saved cache to its final location
     if cache_dir.exists() {
-        tokio::fs::remove_dir_all(&cache_dir).await.context("deleting old version of the cache")?;
+        tokio::fs::remove_dir_all(&cache_dir)
+            .await
+            .context("deleting old version of the cache")?;
     }
     let temp_dir = temp_dir.into_path();
-    let status = Command::new("mv").arg(temp_dir).arg(&*cache_dir).status().await.context("moving cache to its final location")?;
+    let status = Command::new("mv")
+        .arg(temp_dir)
+        .arg(&*cache_dir)
+        .status()
+        .await
+        .context("moving cache to its final location")?;
     if !status.success() {
         anyhow::bail!("failed to move cache to its final location with {status}");
     }
     Ok(())
 }
 
+/// Setup common to reading and writing to a cache
+struct CacheConfig {
+    /// Location of the JSON config file
+    config_path: Box<Path>,
+
+    /// Location of the yearly data
+    year_data_path: Box<Path>,
+
+    /// Schema of the yearly data
+    year_data_schema: Arc<Schema>,
+
+    /// Location of the case equivalence classes
+    case_classes_path: Box<Path>,
+
+    /// Schema of the case equivalence classes
+    case_classes_schema: Arc<Schema>,
+}
+//
+impl CacheConfig {
+    /// Given the cache directory's location, compute other info
+    pub fn new(root_path: &Path) -> Self {
+        let config_path = root_path.join("config.json").into();
+        let year_data_path = root_path.join("year_data.parquet").into();
+        let year_data_schema = Arc::new(Schema::new(vec![
+            // FIXME: Figure out how to use non-nullable data here
+            Field::new("years", DataType::Int16, true),
+            Field::new("match_counts", DataType::UInt64, true),
+            Field::new("volume_counts", DataType::UInt32, true),
+        ]));
+        let case_classes_path = root_path.join("case_classes.parquet").into();
+        let case_classes_schema = Arc::new(Schema::new(vec![Field::new_map(
+            "case_classes",
+            "ngram_to_data_end",
+            Field::new("ngrams", DataType::Utf8, false),
+            // FIXME: Figure out how to use non-nullable data here
+            Field::new("data_ends", DataType::UInt64, true),
+            false,
+            false,
+        )]));
+        Self {
+            config_path,
+            year_data_path,
+            year_data_schema,
+            case_classes_path,
+            case_classes_schema,
+        }
+    }
+}
+
 /// Convert the dataset to RecordBatches at storage block granularity
 fn start_making_record_batches(
     config: Arc<Config>,
     dataset: Arc<Dataset>,
-    year_data_schema: Arc<Schema>,
-    case_classes_schema: Arc<Schema>,
+    cache_config: CacheConfig,
 ) -> (Receiver<RecordBatches>, JoinHandle<Result<()>>) {
     let (sender, receiver) = mpsc::channel(RECORD_BATCH_BUFFERING);
     let join_handle = tokio::task::spawn_blocking(move || {
@@ -240,7 +282,7 @@ fn start_making_record_batches(
             // Convert the collected data into RecordBatches and submit them to
             // the I/O thread for writing to disk
             let year_data = RecordBatch::try_new(
-                year_data_schema.clone(),
+                cache_config.year_data_schema.clone(),
                 vec![
                     Arc::new(years.finish()) as ArrayRef,
                     Arc::new(match_counts.finish()) as ArrayRef,
@@ -248,9 +290,8 @@ fn start_making_record_batches(
                 ],
             )
             .context("creating a yearly data batch")?;
-            //
             let case_classes = RecordBatch::try_new(
-                case_classes_schema.clone(),
+                cache_config.case_classes_schema.clone(),
                 vec![Arc::new(case_classes.finish()) as ArrayRef],
             )
             .context("creating a case classes data batch")?;
@@ -266,6 +307,7 @@ fn start_making_record_batches(
     (receiver, join_handle)
 }
 
+/// RecordBatches from a storage block, ready to be written to disk
 struct RecordBatches {
     year_data: RecordBatch,
     case_classes: RecordBatch,
