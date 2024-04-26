@@ -14,7 +14,7 @@ pub async fn save(config: Arc<Config>, dataset: Arc<Dataset>) -> Result<()> {
     // Look up where the cache should be saved
     //
     // FIXME: Don't write there directly, instead write to a temp directory,
-    //        then replace existing cache with mv
+    //        then replace existing cache with rm+mv
     // FIXME: Should use one distinct cache per language => lang subdirectory
     let cache_dir = cache_dir().context("looking up the cache save location")?;
 
