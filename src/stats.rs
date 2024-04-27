@@ -26,9 +26,9 @@ impl NgramStats {
     /// Truth that an ngram with these usage statistics can be accepted with the
     /// current configuration, if other criteria pass
     pub fn is_acceptable(&self, config: &Config) -> bool {
-        config.min_matches <= self.match_count
-            && config.min_books <= self.min_volume_count
-            && config.min_year <= self.last_year
+        config.input.min_matches <= self.match_count
+            && config.input.min_books <= self.min_volume_count
+            && config.input.min_year <= self.last_year
     }
 
     /// Update statistics with a new yearly entry

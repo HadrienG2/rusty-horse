@@ -13,6 +13,7 @@ mod tsv;
 use crate::{config::Config, progress::ProgressReport};
 use anyhow::Context;
 use clap::Parser;
+use dataset::cache::LoadOutcome;
 use log::LevelFilter;
 use serde::Deserialize;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
@@ -26,7 +27,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 /// ngram (before case equivalence), over the time period of interest.
 #[derive(Parser, Debug)]
 #[command(version, author)]
-struct Args {
+pub struct Args {
     /// Short name of the Google Books Ngram language to be used, e.g.
     /// "eng-fiction"
     ///
@@ -155,46 +156,89 @@ impl Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set up logging
-    setup_logging().map_err(|e| anyhow::format_err!("{e}"))?;
+    setup_logging()
+        .map_err(|e| anyhow::format_err!("{e}"))
+        .context("setting up logging")?;
 
     // Decode CLI arguments
-    let args = Args::parse_and_check()?;
+    let args = Args::parse_and_check().context("parsing CLI arguments")?;
 
     // Pick a book language
-    let language = languages::pick(&args)?;
+    let language = languages::pick(&args).context("choosing a language")?;
     let dataset_urls = language.dataset_urls().collect::<Vec<_>>();
+    let config = Config::new(args, language);
 
     // Set up progress reporting
     let report = ProgressReport::new();
 
-    // Collect the dataset (TODO: Try to use the cache here)
-    let config = Config::new(args, language);
-    let client = reqwest::Client::new();
-    let dataset = tsv::download_and_collect(config.clone(), client, dataset_urls, &report).await?;
+    // Try to load the dataset from the disk cache
+    let ngram_by_decreasing_stats = match dataset::cache::try_load(config.clone())
+        .await
+        .context("trying to load data from cache")?
+    {
+        // Successfully started loading data from disk
+        LoadOutcome::Hit {
+            mut storage_blocks,
+            reader,
+        } => {
+            // TODO: ...now do something with it
+            while let Some(block) = storage_blocks.recv().await {
+                dbg!(block);
+            }
+            reader
+                .await
+                .context("joining cache load job")?
+                .context("loading data from cache")?;
+            Vec::new()
+        }
 
-    // Start caching the dataset on disk (TODO: Don't do this if it comes from
-    // the cache already)
-    let save_cache = tokio::spawn(dataset::cache::save(
-        config.clone(),
-        dataset.clone(),
-        report.clone(),
-    ));
+        // Failed to load data from cache, load it from TSV instead
+        LoadOutcome::Miss(input_config) => {
+            // Collect the dataset from TSV
+            let client = reqwest::Client::new();
+            let cache_config = config.with_input_config(input_config);
+            let dataset =
+                tsv::download_and_collect(cache_config.clone(), client, dataset_urls, &report)
+                    .await
+                    .context("loading data from TSV")?;
 
-    // Pick the most frequent ngrams across all data files
-    let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset, &report);
+            // Start saving the dataset to disk
+            let save_cache = tokio::spawn(dataset::cache::save(
+                cache_config,
+                dataset.clone(),
+                report.clone(),
+            ));
 
-    // Wait until we're done saving the dataset to disk
-    save_cache.await.context("saving dataset to disk")??;
+            // Pick the most frequent ngrams across all data files
+            // FIXME: Move this to common code
+            let ngrams_by_decreasing_stats = top::pick_top_ngrams(&config, &dataset, &report);
+
+            // Wait until we're done saving the dataset to disk
+            save_cache
+                .await
+                .context("joining dataset save job")?
+                .context("saving dataset to disk")?;
+
+            // Bubble up the app results
+            ngrams_by_decreasing_stats
+        }
+    };
 
     // Display the most frequent ngrams
     {
         let stdout = tokio::io::stdout();
         let mut stdout = BufWriter::new(stdout);
-        for ngram in ngrams_by_decreasing_stats {
-            stdout.write_all(ngram.as_bytes()).await?;
-            stdout.write_all(b"\n").await?;
+        for ngram in ngram_by_decreasing_stats {
+            stdout
+                .write_all(ngram.as_bytes())
+                .await
+                .context("writing output to stdout")?;
+            stdout
+                .write_all(b"\n")
+                .await
+                .context("writing output to stdout")?;
         }
-        stdout.flush().await?;
+        stdout.flush().await.context("flushing stdout")?;
     }
     Ok(())
 }

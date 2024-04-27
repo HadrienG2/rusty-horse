@@ -85,9 +85,9 @@ pub(super) fn make_early_filter(config: Arc<Config>) -> impl FnMut(&Entry) -> bo
         }
 
         // Determine if an entry should be rejected
-        let rejection = if entry.data().year < config.min_year {
+        let rejection = if entry.data().year < config.input.min_year {
             Some(RejectCause::Old)
-        } else if config.strip_capitalized
+        } else if config.input.strip_capitalized
             && entry
                 .ngram
                 .chars()

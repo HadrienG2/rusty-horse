@@ -18,7 +18,7 @@ pub fn pick_top_ngrams<'dataset>(
     config: &Config,
     dataset: &'dataset Dataset,
     report: &ProgressReport,
-) -> Vec<&'dataset str> {
+) -> Vec<Box<str>> {
     // Map each case equivalence class into a tuple of global statistics over
     // all ngrams + most common ngrams, or discard the case equivalence class
     let stats = report.add(
@@ -39,7 +39,9 @@ pub fn pick_top_ngrams<'dataset>(
         config.sort_by_popularity,
     ) {
         // If there is no sorting and no limit, just dump the ngrams as-is
-        (None, false) => rev_stats_and_ngrams.map(|(_stats, ngram)| ngram).collect(),
+        (None, false) => rev_stats_and_ngrams
+            .map(|(_stats, ngram)| ngram)
+            .collect::<Vec<_>>(),
 
         // If there is sorting without a limit on the output size, sort the
         // ngrams then dump them
@@ -86,7 +88,7 @@ pub fn pick_top_ngrams<'dataset>(
             if !sort {
                 return top_stats_and_ngrams
                     .into_iter()
-                    .map(|(_stats, ngram)| ngram)
+                    .map(|(_stats, ngram)| Box::from(ngram))
                     .collect();
             }
 
@@ -99,6 +101,10 @@ pub fn pick_top_ngrams<'dataset>(
             result.into()
         }
     }
+    // FIXME: Remove this, that's just for testing out the cache
+    .into_iter()
+    .map(Box::from)
+    .collect()
 }
 
 /// Turn a case equivalence class from the dataset into a most common spelling +
@@ -110,7 +116,7 @@ fn case_class_filter_map<'dataset>(
     let mut case_stats: Option<(NgramStats, &str, NgramStats)> = None;
     'casings: for casing in class.ngrams() {
         // Ignore capitalized ngrams if configured to do so
-        if config.strip_capitalized
+        if config.input.strip_capitalized
             && casing
                 .ngram()
                 .chars()
@@ -123,7 +129,7 @@ fn case_class_filter_map<'dataset>(
 
         // Compute usage statistics for this casing
         let ngram_stats = (casing.years())
-            .take_while(|data| data.year >= config.min_year)
+            .take_while(|data| data.year >= config.input.min_year)
             .fold(None, |acc: Option<NgramStats>, year| {
                 if let Some(mut acc) = acc {
                     acc.add_year(year);
