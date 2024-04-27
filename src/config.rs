@@ -15,7 +15,7 @@ use std::{
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct Config {
     /// Short name of the language in use
-    pub language_name: Box<str>,
+    pub language_id: Box<str>,
 
     /// Truth that capitalized words should be removed from the dataset
     pub strip_capitalized: bool,
@@ -47,7 +47,7 @@ impl Config {
             sort_by_popularity,
         } = args;
         Arc::new(Self {
-            language_name: language.short_name.into(),
+            language_id: language.short_name.into(),
             strip_capitalized: strip_capitalized.unwrap_or(language.should_strip_capitalized),
             min_year,
             min_matches,

@@ -45,7 +45,7 @@ pub async fn save(
 ) -> Result<()> {
     // Set up the application's cache directory & find language cache location
     let cache_dir =
-        cache_dir(&config.language_name).context("looking up the language cache's location")?;
+        cache_dir(&config.language_id).context("looking up the language cache's location")?;
 
     // Use a temporary directory while in the process of saving the cache
     let temp_dir = tempfile::tempdir().context("creating a temporary directory for the cache")?;

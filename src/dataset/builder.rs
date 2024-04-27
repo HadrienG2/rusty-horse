@@ -89,7 +89,7 @@ impl DatasetBuilder {
             // Check if there are sufficient statistics to accept this ngram
             if former_data.stats.is_acceptable(&self.config) {
                 // If so, normalize the ngram with non-word rejection...
-                let Some(former_ngram) = tsv::normalizing_filter_map(former_ngram) else {
+                let Some(former_ngram) = tsv::filter::normalizing_filter_map(former_ngram) else {
                     // Ngram does not look like a word, rejecting it...
                     return;
                 };
